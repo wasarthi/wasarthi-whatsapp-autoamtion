@@ -1,0 +1,23 @@
+{
+  "name": "whatsapp-automation",
+  "version": "1.0.0",
+  "description": "WhatsApp Business Cloud API Automation with Admin Dashboard",
+  "main": "server.js",
+  "scripts": {
+    "start": "node launcher.js",
+    "dev": "node launcher.js",
+    "server": "node server.js"
+  },
+  "dependencies": {
+    "@google/genai": "latest",
+    "axios": "^1.7.0",
+    "sql.js": "^1.11.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.0",
+    "express": "^4.21.0",
+    "morgan": "^1.10.0",
+    "node-cron": "^3.0.3",
+    "qrcode": "^1.5.3",
+    "whatsapp-web.js": "^1.23.0"
+  }
+}
