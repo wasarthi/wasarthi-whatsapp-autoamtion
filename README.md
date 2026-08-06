@@ -30,7 +30,7 @@ An intelligent WhatsApp Business & Web Automation suite powered by **Node.js**, 
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/YOUR_USERNAME/whatsapp-automation.git
+git clone https://github.com/vedicagrawal12/whatsapp-automation.git
 cd whatsapp-automation
 ```
 
