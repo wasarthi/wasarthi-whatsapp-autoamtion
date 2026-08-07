@@ -116,25 +116,20 @@ function initWhatsAppClient() {
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
-            webVersionCache: { type: 'local' },
+            webVersionCache: {
+                type: 'remote',
+                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+            },
             puppeteer: {
-                headless: true,                  // ← true = no visible window to accidentally close
+                headless: true,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-extensions',
+                    '--disable-accelerated-2d-canvas',
                     '--no-first-run',
-                    '--single-process',           // ← reduces memory + crash surface
-                    '--disable-background-networking',
-                    '--disable-default-apps',
-                    '--disable-sync',
-                    '--disable-translate',
-                    '--hide-scrollbars',
-                    '--metrics-recording-only',
-                    '--mute-audio',
-                    '--safebrowsing-disable-auto-update',
+                    '--no-zygote',
+                    '--disable-gpu'
                 ]
             }
         });
