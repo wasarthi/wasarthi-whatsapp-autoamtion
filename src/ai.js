@@ -70,7 +70,14 @@ ${businessName ? `- Business/Organization: ${businessName}` : ''}`;
             contents.push({ role: 'user', parts: [{ text: 'Hi' }] });
         }
 
-        const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+        const modelsToTry = [
+            'gemini-3.5-flash',
+            'gemini-3.6-flash',
+            'gemini-flash-latest',
+            'gemini-pro-latest',
+            'gemini-2.0-flash-lite',
+            'gemini-2.0-flash'
+        ];
         let response = null;
         let lastError = null;
 
@@ -101,7 +108,7 @@ ${businessName ? `- Business/Organization: ${businessName}` : ''}`;
         return text.trim();
     } catch (error) {
         console.error('❌ Gemini AI Error:', error.message || error);
-        return "Hey! Thanks for reaching out. I'll get back to you shortly! 😊";
+        throw error; // Throw so chatbot.js can fallback to rules/default reply
     }
 }
 

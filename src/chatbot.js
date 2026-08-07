@@ -101,11 +101,15 @@ async function processMessage(phone, messageText, contactName = '', client = nul
         const allMessages = getConversation(phone) || [];
         const recentHistory = allMessages.slice(-10);
 
-        const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
-        
-        await safeReply(client, phone, aiResponse, msg);
-        logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
-        return { replied: true, rule: 'ai_persona', response: aiResponse };
+        try {
+            const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
+            
+            await safeReply(client, phone, aiResponse, msg);
+            logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
+            return { replied: true, rule: 'ai_persona', response: aiResponse };
+        } catch (aiErr) {
+            console.warn('⚠️ AI Persona Mode failed (falling back to rules/default reply):', aiErr.message?.split('\\n')[0]);
+        }
     }
 
     // ── 2. STATIC AWAY MODE (Only if AI is disabled) ───────────
@@ -176,11 +180,15 @@ async function processMessage(phone, messageText, contactName = '', client = nul
         const allMessages = getConversation(phone) || [];
         const recentHistory = allMessages.slice(-10);
 
-        const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
-        
-        await safeReply(client, phone, aiResponse, msg);
-        logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
-        return { replied: true, rule: 'ai_fallback', response: aiResponse };
+        try {
+            const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
+            
+            await safeReply(client, phone, aiResponse, msg);
+            logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
+            return { replied: true, rule: 'ai_fallback', response: aiResponse };
+        } catch (aiErr) {
+            console.warn('⚠️ AI Fallback failed (falling back to default reply):', aiErr.message?.split('\\n')[0]);
+        }
     }
 
     // ── 4. Static Default Reply ──

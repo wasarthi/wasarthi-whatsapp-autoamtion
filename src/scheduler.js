@@ -1,15 +1,19 @@
 const cron = require('node-cron');
-const { getPendingScheduledMessages, updateScheduledMessageStatus } = require('./database');
+const { getPendingScheduledMessages, updateScheduledMessageStatus, logMessage } = require('./database');
 const { sendTextMessage } = require('./whatsapp-client');
-const { logMessage } = require('./database');
 
 let schedulerTask = null;
+let isRunning = false;   // prevent overlapping runs
 
-// ─── Initialize the scheduler ───────────────────────────────
+// ─── Initialize the scheduler ────────────────────────────────
 function initScheduler() {
-    // Run every minute to check for pending scheduled messages
+    // Run every minute — the outer try/catch ensures a cron error never crashes the process
     schedulerTask = cron.schedule('* * * * *', async () => {
-        await processPendingMessages();
+        try {
+            await processPendingMessages();
+        } catch (err) {
+            console.error('❌ Scheduler tick error (non-fatal):', err.message);
+        }
     });
 
     console.log('⏰ Scheduler: checking for pending messages every minute');
@@ -17,40 +21,66 @@ function initScheduler() {
 
 // ─── Process all due scheduled messages ─────────────────────
 async function processPendingMessages() {
-    const pending = getPendingScheduledMessages();
+    // Skip if a previous run is still in-flight (e.g. slow network)
+    if (isRunning) return;
+    isRunning = true;
 
-    if (pending.length === 0) return;
+    let pending = [];
+    try {
+        pending = getPendingScheduledMessages();
+    } catch (dbErr) {
+        console.error('❌ Scheduler: failed to query pending messages:', dbErr.message);
+        isRunning = false;
+        return;
+    }
+
+    if (pending.length === 0) {
+        isRunning = false;
+        return;
+    }
 
     console.log(`⏰ Processing ${pending.length} scheduled message(s)...`);
 
     for (const msg of pending) {
         try {
-            const result = await sendTextMessage(msg.phone, msg.body);
+            // Timeout guard: don't let a single message block the whole scheduler
+            const result = await Promise.race([
+                sendTextMessage(msg.phone, msg.body),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('sendTextMessage timeout')), 20000))
+            ]);
 
-            // Log the sent message
-            logMessage({
-                waMessageId: result.messageId,
-                phone: msg.phone,
-                direction: 'outgoing',
-                messageType: 'text',
-                body: msg.body,
-                status: 'sent'
-            });
+            try {
+                logMessage({
+                    waMessageId: result?.id?._serialized || null,
+                    phone: msg.phone,
+                    direction: 'outgoing',
+                    messageType: 'text',
+                    body: msg.body,
+                    status: 'sent'
+                });
+            } catch (logErr) {
+                console.warn('⚠️ Could not log scheduled message (non-fatal):', logErr.message);
+            }
 
-            // Update scheduled message status
             updateScheduledMessageStatus(msg.id, 'sent');
             console.log(`✅ Scheduled message #${msg.id} sent to ${msg.phone}`);
         } catch (error) {
             console.error(`❌ Scheduled message #${msg.id} failed:`, error.message);
-            updateScheduledMessageStatus(msg.id, 'failed', error.message);
+            try {
+                updateScheduledMessageStatus(msg.id, 'failed', error.message);
+            } catch (dbErr) {
+                console.error('❌ Could not update failed status:', dbErr.message);
+            }
         }
 
-        // Rate limiting: wait 1 second between messages
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Anti-spam delay between messages
+        await new Promise(resolve => setTimeout(resolve, 1200));
     }
+
+    isRunning = false;
 }
 
-// ─── Stop the scheduler ─────────────────────────────────────
+// ─── Stop the scheduler ──────────────────────────────────────
 function stopScheduler() {
     if (schedulerTask) {
         schedulerTask.stop();

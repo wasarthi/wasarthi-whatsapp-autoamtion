@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WhatsApp Automation</title>
+    <title>WhatsApp Automation — Dashboard</title>
     <meta name="description" content="Manage your WhatsApp Business automation — chatbot rules, contacts, scheduled messages and analytics.">
+    <meta name="theme-color" content="#25D366">
     <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -28,444 +29,565 @@
         </div>
     </div>
 
-    <nav class="sidebar-nav">
-        <a href="#" class="nav-item active" data-section="dashboard">
-            <span class="nav-icon">📊</span>
+    <nav class="sidebar-nav" role="navigation" aria-label="Main navigation">
+        <a href="#" class="nav-item active" data-section="dashboard" id="nav-dashboard" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">📊</span>
             <span class="nav-label">Dashboard</span>
         </a>
-        <a href="#" class="nav-item" data-section="messages">
-            <span class="nav-icon">💬</span>
+        <a href="#" class="nav-item" data-section="messages" id="nav-messages" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">💬</span>
             <span class="nav-label">Messages</span>
         </a>
-        <a href="#" class="nav-item" data-section="chatbot">
-            <span class="nav-icon">🤖</span>
+        <a href="#" class="nav-item" data-section="chatbot" id="nav-chatbot" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">🤖</span>
             <span class="nav-label">Chatbot Rules</span>
         </a>
-        <a href="#" class="nav-item" data-section="contacts">
-            <span class="nav-icon">👥</span>
+        <a href="#" class="nav-item" data-section="contacts" id="nav-contacts" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">👥</span>
             <span class="nav-label">Contacts</span>
         </a>
-        <a href="#" class="nav-item" data-section="scheduled">
-            <span class="nav-icon">⏰</span>
+        <a href="#" class="nav-item" data-section="scheduled" id="nav-scheduled" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">⏰</span>
             <span class="nav-label">Scheduled</span>
         </a>
-        <a href="#" class="nav-item" data-section="settings">
-            <span class="nav-icon">⚙️</span>
+        <a href="#" class="nav-item" data-section="settings" id="nav-settings" role="menuitem">
+            <span class="nav-icon" aria-hidden="true">⚙️</span>
             <span class="nav-label">Settings</span>
         </a>
     </nav>
 
     <div class="sidebar-footer">
-        <div class="connection-status" id="connectionStatus">
-            <span class="status-dot"></span>
+        <div class="connection-status" id="connectionStatus" aria-live="polite">
+            <span class="status-dot" aria-hidden="true"></span>
             <span class="status-text">Checking…</span>
         </div>
     </div>
 </aside>
 
-<!-- Mobile top bar -->
-<header class="mobile-header" id="mobileHeader">
-    <button class="hamburger" id="menuToggle" aria-label="Open menu">
+<!-- ── Top Bar (desktop) ── -->
+<header class="topbar" id="topbar" role="banner">
+    <div class="topbar-search">
+        <input type="search" id="globalSearch" placeholder="Search messages, contacts…" aria-label="Global search">
+    </div>
+    <div class="topbar-spacer"></div>
+    <div class="topbar-actions">
+        <button class="topbar-icon-btn" id="refreshBtn" title="Refresh" aria-label="Refresh current section">🔄</button>
+        <div class="topbar-avatar" id="topbarAvatar" title="Account" aria-label="Account menu">WA</div>
+    </div>
+</header>
+
+<!-- ── Mobile Header ── -->
+<header class="mobile-header" id="mobileHeader" role="banner">
+    <button class="hamburger" id="menuToggle" aria-label="Open navigation menu" aria-expanded="false" aria-controls="sidebar">
         <span></span><span></span><span></span>
     </button>
     <span class="mobile-title">WA Automation</span>
 </header>
 
-<div class="overlay" id="overlay"></div>
+<div class="overlay" id="overlay" role="presentation"></div>
 
 <!-- ══════════════════════════════════════════
      MAIN CONTENT
 ══════════════════════════════════════════ -->
-<main class="main-content" id="mainContent">
+<main class="main-content" id="mainContent" role="main">
 
     <!-- ── DASHBOARD ── -->
-    <section class="section active" id="section-dashboard">
-        <div class="section-header">
-            <h2>Dashboard</h2>
-            <p class="section-subtitle">Overview of your WhatsApp automation activity</p>
-        </div>
+    <section class="section active" id="section-dashboard" aria-labelledby="dashboard-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="dashboard-heading">Dashboard</h1>
+                <p class="section-subtitle">Overview of your WhatsApp automation activity</p>
+            </div>
 
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-icon sent">📤</div>
-                <div class="stat-info">
-                    <span class="stat-value" id="valSentToday">0</span>
-                    <span class="stat-label">Sent Today</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon received">📥</div>
-                <div class="stat-info">
-                    <span class="stat-value" id="valReceivedToday">0</span>
-                    <span class="stat-label">Received Today</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon contacts">👥</div>
-                <div class="stat-info">
-                    <span class="stat-value" id="valContacts">0</span>
-                    <span class="stat-label">Total Contacts</span>
-                </div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-icon rules">🤖</div>
-                <div class="stat-info">
-                    <span class="stat-value" id="valActiveRules">0</span>
-                    <span class="stat-label">Active Rules</span>
-                </div>
-            </div>
-        </div>
-
-        <div class="dashboard-grid">
-            <div class="card quick-send-card">
-                <h3 class="card-title">Quick Send</h3>
-                <form id="quickSendForm" class="quick-send-form">
-                    <div class="form-group">
-                        <label for="qsPhone">Phone Number</label>
-                        <input type="text" id="qsPhone" placeholder="e.g. 919876543210" required>
+            <!-- Stats -->
+            <div class="stats-grid" role="list" aria-label="Key metrics">
+                <div class="stat-card" role="listitem">
+                    <div class="stat-icon sent" aria-hidden="true">📤</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valSentToday">0</span>
+                        <span class="stat-label">Sent Today</span>
                     </div>
-                    <div class="form-group">
-                        <label for="qsMessage">Message</label>
-                        <textarea id="qsMessage" rows="3" placeholder="Type your message…" required></textarea>
+                </div>
+                <div class="stat-card" role="listitem">
+                    <div class="stat-icon received" aria-hidden="true">📥</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valReceivedToday">0</span>
+                        <span class="stat-label">Received Today</span>
                     </div>
-                    <button type="submit" class="btn btn-primary" style="align-self:flex-start">
-                        <span class="btn-icon">📨</span> Send Message
-                    </button>
-                </form>
+                </div>
+                <div class="stat-card" role="listitem">
+                    <div class="stat-icon contacts" aria-hidden="true">👥</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valContacts">0</span>
+                        <span class="stat-label">Total Contacts</span>
+                    </div>
+                </div>
+                <div class="stat-card" role="listitem">
+                    <div class="stat-icon rules" aria-hidden="true">🤖</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valActiveRules">0</span>
+                        <span class="stat-label">Active Rules</span>
+                    </div>
+                </div>
             </div>
 
-            <div class="card">
-                <h3 class="card-title">Recent Activity</h3>
-                <div class="activity-list" id="recentActivity">
-                    <div class="empty-state">No recent messages yet</div>
+            <!-- Error banner placeholder -->
+            <div id="dashboardError" style="display:none"></div>
+
+            <div class="dashboard-grid">
+                <!-- Quick Send -->
+                <div class="card quick-send-card">
+                    <h2 class="card-title">Quick Send</h2>
+                    <form id="quickSendForm" class="quick-send-form" novalidate>
+                        <div class="form-group">
+                            <label for="qsPhone">Phone Number</label>
+                            <input type="tel" id="qsPhone" placeholder="e.g. 919876543210" required autocomplete="tel">
+                        </div>
+                        <div class="form-group">
+                            <label for="qsMessage">Message</label>
+                            <textarea id="qsMessage" rows="3" placeholder="Type your message…" required></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary" id="quickSendBtn">
+                            <span class="btn-icon" aria-hidden="true">📨</span> Send Message
+                        </button>
+                    </form>
+                </div>
+
+                <!-- Recent Activity -->
+                <div class="card">
+                    <h2 class="card-title">Recent Activity</h2>
+                    <div class="activity-list" id="recentActivity" aria-live="polite" aria-label="Recent messages">
+                        <!-- Skeleton -->
+                        <div class="skeleton-row" id="activitySkeleton">
+                            <div class="skeleton skeleton-circle"></div>
+                            <div class="skeleton-lines">
+                                <div class="skeleton skeleton-line skeleton-line-short"></div>
+                                <div class="skeleton skeleton-line skeleton-line-long"></div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </section>
 
     <!-- ── MESSAGES ── -->
-    <section class="section" id="section-messages">
-        <div class="section-header">
-            <h2>Messages</h2>
-            <p class="section-subtitle">All incoming and outgoing messages</p>
-        </div>
-        <div class="toolbar">
-            <div class="search-box">
-                <input type="text" id="messageSearch" placeholder="Search by phone number…">
+    <section class="section" id="section-messages" aria-labelledby="messages-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="messages-heading">Messages</h1>
+                <p class="section-subtitle">All incoming and outgoing messages</p>
             </div>
-            <div class="filter-group">
-                <select id="messageFilter">
-                    <option value="">All Messages</option>
-                    <option value="incoming">Incoming</option>
-                    <option value="outgoing">Outgoing</option>
-                </select>
+
+            <div id="messagesError" style="display:none"></div>
+
+            <div class="toolbar">
+                <div class="search-box">
+                    <input type="search" id="messageSearch" placeholder="Search by phone number…" aria-label="Search messages">
+                </div>
+                <div class="filter-group">
+                    <select id="messageFilter" aria-label="Filter by direction">
+                        <option value="">All Messages</option>
+                        <option value="incoming">Incoming</option>
+                        <option value="outgoing">Outgoing</option>
+                    </select>
+                </div>
             </div>
-        </div>
-        <div class="card">
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Direction</th>
-                            <th>Phone / Name</th>
-                            <th>Message</th>
-                            <th>Status</th>
-                            <th>Time</th>
-                        </tr>
-                    </thead>
-                    <tbody id="messagesBody">
-                        <tr><td colspan="5" class="empty-state">Loading messages…</td></tr>
-                    </tbody>
-                </table>
+
+            <div class="card">
+                <div class="table-container">
+                    <table class="data-table" aria-label="Messages log">
+                        <thead>
+                            <tr>
+                                <th scope="col">Direction</th>
+                                <th scope="col">Phone / Name</th>
+                                <th scope="col">Message</th>
+                                <th scope="col">Status</th>
+                                <th scope="col">Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="messagesBody">
+                            <tr><td colspan="5" class="empty-state">Loading messages…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </section>
 
     <!-- ── CHATBOT RULES ── -->
-    <section class="section" id="section-chatbot">
-        <div class="section-header">
-            <h2>Chatbot Rules</h2>
-            <p class="section-subtitle">Configure auto-reply rules for incoming messages</p>
-        </div>
-
-        <!-- Test widget -->
-        <div class="card test-card">
-            <h3 class="card-title">Test a Message</h3>
-            <div class="test-form">
-                <input type="text" id="testMessage" placeholder="e.g. hello, what are your prices?">
-                <button class="btn btn-secondary" id="testChatbotBtn">Test</button>
+    <section class="section" id="section-chatbot" aria-labelledby="chatbot-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="chatbot-heading">Chatbot Rules</h1>
+                <p class="section-subtitle">Configure auto-reply rules for incoming messages</p>
             </div>
-            <div class="test-result" id="testResult" style="display:none;"></div>
-        </div>
 
-        <!-- Add rule -->
-        <div class="card">
-            <h3 class="card-title">Add New Rule</h3>
-            <form id="addRuleForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="ruleTrigger">Trigger Keyword</label>
-                        <input type="text" id="ruleTrigger" placeholder="e.g. price" required>
+            <div id="chatbotError" style="display:none"></div>
+
+            <!-- Test widget -->
+            <div class="card test-card">
+                <h2 class="card-title">Test a Message</h2>
+                <div class="test-form">
+                    <input type="text" id="testMessage" placeholder="e.g. hello, what are your prices?" aria-label="Test message input">
+                    <button class="btn btn-secondary" id="testChatbotBtn" type="button">Test</button>
+                </div>
+                <div class="test-result" id="testResult" style="display:none;" role="alert" aria-live="polite"></div>
+            </div>
+
+            <!-- Add Rule -->
+            <div class="card">
+                <h2 class="card-title">Add New Rule</h2>
+                <form id="addRuleForm" novalidate>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label for="ruleTrigger">Trigger Keyword</label>
+                            <input type="text" id="ruleTrigger" placeholder="e.g. price" required autocomplete="off">
+                        </div>
+                        <div class="form-group">
+                            <label for="ruleMatchType">Match Type</label>
+                            <select id="ruleMatchType">
+                                <option value="contains">Contains</option>
+                                <option value="exact">Exact</option>
+                                <option value="startswith">Starts With</option>
+                                <option value="regex">Regex</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="rulePriority">Priority</label>
+                            <input type="number" id="rulePriority" value="5" min="0" max="100">
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="ruleMatchType">Match Type</label>
-                        <select id="ruleMatchType">
-                            <option value="contains">Contains</option>
-                            <option value="exact">Exact</option>
-                            <option value="startswith">Starts With</option>
-                            <option value="regex">Regex</option>
-                        </select>
+                        <label for="ruleResponse">Auto-Reply Message</label>
+                        <textarea id="ruleResponse" rows="3" placeholder="The reply to send… (use {name} for contact name)" required></textarea>
                     </div>
-                    <div class="form-group form-group-sm">
-                        <label for="rulePriority">Priority</label>
-                        <input type="number" id="rulePriority" value="5" min="0" max="100">
+                    <button type="submit" class="btn btn-primary">Add Rule</button>
+                </form>
+            </div>
+
+            <!-- Rules list -->
+            <div class="card">
+                <h2 class="card-title">Active Rules</h2>
+                <div class="rules-list" id="rulesList" aria-live="polite">
+                    <!-- Skeleton -->
+                    <div id="rulesSkeleton">
+                        <div class="skeleton-row">
+                            <div class="skeleton skeleton-circle"></div>
+                            <div class="skeleton-lines">
+                                <div class="skeleton skeleton-line skeleton-line-short"></div>
+                                <div class="skeleton skeleton-line skeleton-line-long"></div>
+                            </div>
+                        </div>
+                        <div class="skeleton-row">
+                            <div class="skeleton skeleton-circle"></div>
+                            <div class="skeleton-lines">
+                                <div class="skeleton skeleton-line skeleton-line-short"></div>
+                                <div class="skeleton skeleton-line skeleton-line-long"></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
-                <div class="form-group">
-                    <label for="ruleResponse">Auto-Reply Message</label>
-                    <textarea id="ruleResponse" rows="3" placeholder="The reply to send… (use {name} for contact name)" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary">Add Rule</button>
-            </form>
-        </div>
-
-        <!-- Rules list -->
-        <div class="card">
-            <h3 class="card-title">Active Rules</h3>
-            <div class="rules-list" id="rulesList">
-                <div class="empty-state">Loading…</div>
             </div>
         </div>
     </section>
 
     <!-- ── CONTACTS ── -->
-    <section class="section" id="section-contacts">
-        <div class="section-header">
-            <h2>Contacts</h2>
-            <p class="section-subtitle">Manage your WhatsApp contacts</p>
-        </div>
-
-        <div class="card">
-            <h3 class="card-title">Add Contact</h3>
-            <form id="addContactForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="contactPhone">Phone Number</label>
-                        <input type="text" id="contactPhone" placeholder="e.g. 919876543210" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="contactName">Name</label>
-                        <input type="text" id="contactName" placeholder="Contact name">
-                    </div>
-                    <div class="form-group">
-                        <label for="contactLabel">Label</label>
-                        <input type="text" id="contactLabel" placeholder="e.g. Customer, Lead">
-                    </div>
-                </div>
-                <button type="submit" class="btn btn-primary">Add Contact</button>
-            </form>
-        </div>
-
-        <div class="toolbar">
-            <div class="search-box">
-                <input type="text" id="contactSearch" placeholder="Search contacts…">
+    <section class="section" id="section-contacts" aria-labelledby="contacts-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="contacts-heading">Contacts</h1>
+                <p class="section-subtitle">Manage your WhatsApp contacts</p>
             </div>
-        </div>
 
-        <div class="card">
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Name</th>
-                            <th>Phone</th>
-                            <th>Label</th>
-                            <th>Added</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="contactsBody">
-                        <tr><td colspan="5" class="empty-state">Loading contacts…</td></tr>
-                    </tbody>
-                </table>
+            <div id="contactsError" style="display:none"></div>
+
+            <div class="card">
+                <h2 class="card-title">Add Contact</h2>
+                <form id="addContactForm" novalidate>
+                    <div class="form-row-3">
+                        <div class="form-group">
+                            <label for="contactPhone">Phone Number</label>
+                            <input type="tel" id="contactPhone" placeholder="e.g. 919876543210" required autocomplete="tel">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactName">Name</label>
+                            <input type="text" id="contactName" placeholder="Contact name" autocomplete="name">
+                        </div>
+                        <div class="form-group">
+                            <label for="contactLabel">Label</label>
+                            <input type="text" id="contactLabel" placeholder="e.g. Customer, Lead">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Add Contact</button>
+                </form>
+            </div>
+
+            <div class="toolbar">
+                <div class="search-box">
+                    <input type="search" id="contactSearch" placeholder="Search contacts…" aria-label="Search contacts">
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="table-container">
+                    <table class="data-table" aria-label="Contacts list">
+                        <thead>
+                            <tr>
+                                <th scope="col">Name</th>
+                                <th scope="col">Phone</th>
+                                <th scope="col">Label</th>
+                                <th scope="col">Added</th>
+                                <th scope="col"><span class="sr-only">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="contactsBody">
+                            <tr><td colspan="5" class="empty-state">Loading contacts…</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </section>
 
     <!-- ── SCHEDULED ── -->
-    <section class="section" id="section-scheduled">
-        <div class="section-header">
-            <h2>Scheduled Messages</h2>
-            <p class="section-subtitle">Schedule messages for future delivery</p>
-        </div>
+    <section class="section" id="section-scheduled" aria-labelledby="scheduled-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="scheduled-heading">Scheduled Messages</h1>
+                <p class="section-subtitle">Schedule messages for future delivery</p>
+            </div>
 
-        <div class="card">
-            <h3 class="card-title">Schedule a Message</h3>
-            <form id="scheduleForm">
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="schedPhone">Phone Number</label>
-                        <input type="text" id="schedPhone" placeholder="e.g. 919876543210" required>
+            <div id="scheduledError" style="display:none"></div>
+
+            <div class="card">
+                <h2 class="card-title">Schedule a Message</h2>
+                <form id="scheduleForm" novalidate>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="schedPhone">Phone Number</label>
+                            <input type="tel" id="schedPhone" placeholder="e.g. 919876543210" required autocomplete="tel">
+                        </div>
+                        <div class="form-group">
+                            <label for="schedDate">Send At</label>
+                            <input type="datetime-local" id="schedDate" required>
+                        </div>
                     </div>
                     <div class="form-group">
-                        <label for="schedDate">Send At</label>
-                        <input type="datetime-local" id="schedDate" required>
+                        <label for="schedMessage">Message</label>
+                        <textarea id="schedMessage" rows="3" placeholder="Message to send at scheduled time…" required></textarea>
                     </div>
-                </div>
-                <div class="form-group">
-                    <label for="schedMessage">Message</label>
-                    <textarea id="schedMessage" rows="3" placeholder="Message to send at scheduled time…" required></textarea>
-                </div>
-                <button type="submit" class="btn btn-primary">Schedule Message</button>
-            </form>
-        </div>
+                    <button type="submit" class="btn btn-primary">Schedule Message</button>
+                </form>
+            </div>
 
-        <div class="card">
-            <h3 class="card-title">Scheduled Messages</h3>
-            <div class="table-container">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Phone</th>
-                            <th>Message</th>
-                            <th>Scheduled At</th>
-                            <th>Status</th>
-                            <th></th>
-                        </tr>
-                    </thead>
-                    <tbody id="scheduledBody">
-                        <tr><td colspan="5" class="empty-state">No scheduled messages</td></tr>
-                    </tbody>
-                </table>
+            <div class="card">
+                <h2 class="card-title">Scheduled Messages</h2>
+                <div class="table-container">
+                    <table class="data-table" aria-label="Scheduled messages list">
+                        <thead>
+                            <tr>
+                                <th scope="col">Phone</th>
+                                <th scope="col">Message</th>
+                                <th scope="col">Scheduled At</th>
+                                <th scope="col">Status</th>
+                                <th scope="col"><span class="sr-only">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="scheduledBody">
+                            <tr><td colspan="5" class="empty-state">No scheduled messages</td></tr>
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </section>
 
     <!-- ── SETTINGS ── -->
-    <section class="section" id="section-settings">
-        <div class="section-header">
-            <h2>Settings</h2>
-            <p class="section-subtitle">Configure your WhatsApp automation</p>
-        </div>
-
-        <div class="card">
-            <h3 class="card-title">Connection Status</h3>
-            <div class="connection-info" id="connectionInfo">
-                <p>Checking connection…</p>
+    <section class="section" id="section-settings" aria-labelledby="settings-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="settings-heading">Settings</h1>
+                <p class="section-subtitle">Configure your WhatsApp automation</p>
             </div>
-        </div>
 
-        <div class="card">
-            <h3 class="card-title">General</h3>
-            <form id="settingsForm">
-                <div class="form-group">
-                    <label for="settBusinessName">Business Name</label>
-                    <input type="text" id="settBusinessName" placeholder="Your business name">
-                </div>
-
-                <div class="toggle-group">
-                    <label>Chatbot Enabled</label>
-                    <label class="toggle">
-                        <input type="checkbox" id="settChatbotEnabled" checked>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="toggle-group">
-                    <label>Away Mode</label>
-                    <label class="toggle">
-                        <input type="checkbox" id="settAwayMode">
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="form-group" style="margin-top:16px">
-                    <label for="settDefaultReply">Default Reply (when no rule matches)</label>
-                    <textarea id="settDefaultReply" rows="2" placeholder="Fallback auto-reply message…"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label for="settAwayMessage">Away Message</label>
-                    <textarea id="settAwayMessage" rows="2" placeholder="Sent when away mode is on…"></textarea>
-                </div>
-
-                <div class="form-group">
-                    <label for="settWelcomeMessage">Welcome Message</label>
-                    <textarea id="settWelcomeMessage" rows="2" placeholder="Sent to new contacts…"></textarea>
-                </div>
-
-                <button type="submit" class="btn btn-primary">Save Settings</button>
-            </form>
-        </div>
-
-        <div class="card">
-            <h3 class="card-title">🧠 Personal AI Persona (Gemini)</h3>
-            <p class="card-note" style="margin-bottom: 16px;">Configure your AI to converse authentically on your behalf on WhatsApp using Google Gemini.</p>
-            <form id="aiSettingsForm">
-                <div class="toggle-group">
-                    <label>Enable AI Persona Auto-Reply</label>
-                    <label class="toggle">
-                        <input type="checkbox" id="settAiEnabled" checked>
-                        <span class="toggle-slider"></span>
-                    </label>
-                </div>
-
-                <div class="form-row" style="margin-top: 14px;">
-                    <div class="form-group">
-                        <label for="settOwnerName">Your Name / Identity</label>
-                        <input type="text" id="settOwnerName" placeholder="e.g. Alex / My Name">
-                        <p class="form-text">The AI knows it is replying on your behalf.</p>
-                    </div>
-                    <div class="form-group">
-                        <label for="settAiMode">AI Priority Mode</label>
-                        <select id="settAiMode">
-                            <option value="ai_first">AI Persona First (Conversational & Natural)</option>
-                            <option value="rules_first">Keyword Rules First (Fallback to AI)</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label>Quick Persona Presets</label>
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px;">
-                        <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="casual">💬 Casual & Friendly</button>
-                        <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="assistant">🤖 Personal Assistant</button>
-                        <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="professional">👔 Professional</button>
-                        <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="short">⚡ Short & Direct</button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label for="settAiSystemPrompt">AI Personality & Custom Instructions</label>
-                    <textarea id="settAiSystemPrompt" rows="5" placeholder="Tell the AI how to talk, what you do, how to answer common questions..."></textarea>
-                    <p class="form-text">You can mention what you're busy with, how you prefer to be reached, or custom details.</p>
-                </div>
-                
-                <div class="form-group">
-                    <label for="settGeminiApiKey">Google Gemini API Key</label>
-                    <input type="password" id="settGeminiApiKey" class="form-control" placeholder="Enter your Gemini API Key">
-                    <p class="form-text">Get a free key from <a href="https://aistudio.google.com/" target="_blank">Google AI Studio</a>.</p>
-                </div>
-
-                <button type="submit" class="btn btn-primary">Save AI Persona Settings</button>
-            </form>
-        </div>        <div class="card">
-            <h3 class="card-title">WhatsApp Web QR Code</h3>
-            <p class="card-note">Scan this QR code with your personal WhatsApp to connect the bot.</p>
-            <div id="qrContainer" style="text-align: center; padding: 20px; border: 1px dashed var(--border); border-radius: 8px; margin-top: 15px; background: white;">
-                <div id="qrLoading" style="color: var(--text-muted); margin: 20px 0;">Waiting for QR Code... (This may take up to 30 seconds)</div>
-                <img id="qrImage" src="" alt="WhatsApp QR Code" style="display: none; max-width: 250px; margin: 0 auto; border: 10px solid white; border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,0.1);">
-                <div id="qrSuccess" style="display: none; color: #25D366; font-weight: 600; font-size: 18px; margin: 20px 0;">
-                    ✅ WhatsApp is Connected!
+            <!-- Connection Status card (always visible) -->
+            <div class="card">
+                <h2 class="card-title">Connection Status</h2>
+                <div class="connection-info" id="connectionInfo" aria-live="polite">
+                    <p>Checking connection…</p>
                 </div>
             </div>
+
+            <!-- Settings Tabs -->
+            <div class="settings-tabs" role="tablist" aria-label="Settings sections">
+                <button class="settings-tab active" role="tab" aria-selected="true"  aria-controls="stab-general"     id="tab-general"     data-tab="general"     type="button">General</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-ai"          id="tab-ai"          data-tab="ai"          type="button">AI Behavior</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-qr"          id="tab-qr"          data-tab="qr"          type="button">WhatsApp QR</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-danger"      id="tab-danger"      data-tab="danger"      type="button">Danger Zone</button>
+            </div>
+
+            <!-- ── Tab: General ── -->
+            <div class="settings-panel active" id="stab-general" role="tabpanel" aria-labelledby="tab-general">
+                <div class="card">
+                    <h2 class="card-title">General</h2>
+                    <form id="settingsForm" novalidate>
+                        <div class="form-group">
+                            <label for="settBusinessName">Business Name</label>
+                            <input type="text" id="settBusinessName" placeholder="Your business name" autocomplete="organization">
+                        </div>
+
+                        <div class="toggle-group">
+                            <span>Chatbot Enabled</span>
+                            <label class="toggle" aria-label="Enable chatbot">
+                                <input type="checkbox" id="settChatbotEnabled" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="toggle-group">
+                            <span>Away Mode</span>
+                            <label class="toggle" aria-label="Enable away mode">
+                                <input type="checkbox" id="settAwayMode">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="form-group" style="margin-top:16px">
+                            <label for="settDefaultReply">Default Reply (when no rule matches)</label>
+                            <textarea id="settDefaultReply" rows="2" placeholder="Fallback auto-reply message…"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="settAwayMessage">Away Message</label>
+                            <textarea id="settAwayMessage" rows="2" placeholder="Sent when away mode is on…"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="settWelcomeMessage">Welcome Message</label>
+                            <textarea id="settWelcomeMessage" rows="2" placeholder="Sent to new contacts…"></textarea>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- ── Tab: AI Behavior ── -->
+            <div class="settings-panel" id="stab-ai" role="tabpanel" aria-labelledby="tab-ai">
+                <div class="card">
+                    <h2 class="card-title">🧠 Personal AI Persona (Gemini)</h2>
+                    <p class="card-note">Configure your AI to converse authentically on your behalf on WhatsApp using Google Gemini.</p>
+                    <form id="aiSettingsForm" novalidate>
+                        <div class="toggle-group">
+                            <span>Enable AI Persona Auto-Reply</span>
+                            <label class="toggle" aria-label="Enable AI persona auto-reply">
+                                <input type="checkbox" id="settAiEnabled" checked>
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+
+                        <div class="form-row" style="margin-top:16px">
+                            <div class="form-group">
+                                <label for="settOwnerName">Your Name / Identity</label>
+                                <input type="text" id="settOwnerName" placeholder="e.g. Alex / My Name" autocomplete="name">
+                                <p class="form-text">The AI knows it is replying on your behalf.</p>
+                            </div>
+                            <div class="form-group">
+                                <label for="settAiMode">AI Priority Mode</label>
+                                <select id="settAiMode">
+                                    <option value="ai_first">AI Persona First (Conversational &amp; Natural)</option>
+                                    <option value="rules_first">Keyword Rules First (Fallback to AI)</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Quick Persona Presets</label>
+                            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                                <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="casual">💬 Casual &amp; Friendly</button>
+                                <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="assistant">🤖 Personal Assistant</button>
+                                <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="professional">👔 Professional</button>
+                                <button type="button" class="btn btn-sm btn-secondary preset-btn" data-preset="short">⚡ Short &amp; Direct</button>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="settAiSystemPrompt">AI Personality &amp; Custom Instructions</label>
+                            <textarea id="settAiSystemPrompt" rows="5" placeholder="Tell the AI how to talk, what you do, how to answer common questions..."></textarea>
+                            <p class="form-text">You can mention what you're busy with, how you prefer to be reached, or custom details.</p>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="settGeminiApiKey">Google Gemini API Key</label>
+                            <input type="password" id="settGeminiApiKey" placeholder="Enter your Gemini API Key" autocomplete="new-password">
+                            <p class="form-text">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener noreferrer">Google AI Studio</a>.</p>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary" id="saveAiBtn">Save AI Persona Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- ── Tab: WhatsApp QR ── -->
+            <div class="settings-panel" id="stab-qr" role="tabpanel" aria-labelledby="tab-qr">
+                <div class="card">
+                    <h2 class="card-title">WhatsApp Web QR Code</h2>
+                    <p class="card-note">Scan this QR code with your personal WhatsApp to connect the bot.</p>
+                    <div class="qr-container" id="qrContainer" aria-live="polite">
+                        <div class="qr-loading" id="qrLoading">Waiting for QR Code… (This may take up to 30 seconds)</div>
+                        <img id="qrImage" src="" alt="WhatsApp QR Code — scan with your phone" class="qr-image">
+                        <div class="qr-success" id="qrSuccess" style="display:none;">
+                            ✅ WhatsApp is Connected!
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Danger Zone ── -->
+            <div class="settings-panel" id="stab-danger" role="tabpanel" aria-labelledby="tab-danger">
+                <div class="danger-zone-card">
+                    <h2 class="card-title">⚠️ Danger Zone</h2>
+                    <p class="card-note">These actions are irreversible. Please be certain before proceeding.</p>
+
+                    <div style="display:flex;flex-direction:column;gap:12px;">
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+                            <div>
+                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Pause Chatbot</div>
+                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Temporarily stop all auto-replies without losing configuration.</div>
+                            </div>
+                            <button class="btn btn-danger btn-sm" id="pauseChatbotBtn" type="button">Pause</button>
+                        </div>
+
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
+                            <div>
+                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Clear Message History</div>
+                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Delete all stored messages from the database permanently.</div>
+                            </div>
+                            <button class="btn btn-danger btn-sm" id="clearMessagesBtn" type="button">Clear All</button>
+                        </div>
+
+                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;">
+                            <div>
+                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Disconnect WhatsApp</div>
+                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Log out of the current WhatsApp session. You will need to re-scan the QR code.</div>
+                            </div>
+                            <button class="btn btn-danger btn-sm" id="disconnectBtn" type="button">Disconnect</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </section>
 
 </main>
 
+<!-- ── Screen-reader only utility ── -->
+<style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
+
 <!-- Toast container -->
-<div class="toast-container" id="toastContainer"></div>
+<div class="toast-container" id="toastContainer" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="js/app.js"></script>
 </body>

@@ -1,12 +1,16 @@
 /**
  * launcher.js — Crash-proof wrapper for server.js
- * Automatically restarts the server if it ever exits for any reason.
+ * Uses exponential back-off so a boot-loop doesn't hammer the system.
  */
 const { spawn } = require('child_process');
-const path = require('path');
 
-let restartCount = 0;
+let restartCount  = 0;
 let lastStartTime = Date.now();
+
+// Exponential back-off: 2s → 4s → 8s → 16s → 30s (cap)
+function backoffDelay(attempt) {
+    return Math.min(2000 * Math.pow(2, attempt - 1), 30000);
+}
 
 function startServer() {
     restartCount++;
@@ -15,7 +19,7 @@ function startServer() {
 
     const child = spawn('node', ['server.js'], {
         cwd: __dirname,
-        stdio: 'inherit',   // share terminal output
+        stdio: 'inherit',
         env: { ...process.env }
     });
 
@@ -26,22 +30,37 @@ function startServer() {
 
     child.on('exit', (code, signal) => {
         const uptime = ((Date.now() - lastStartTime) / 1000).toFixed(1);
-        console.log(`\n⚠️  [Launcher] Server exited after ${uptime}s (code=${code}, signal=${signal})`);
+
+        // If process was alive for > 60s, treat it as a "clean" run and reset back-off
+        if (Date.now() - lastStartTime > 60000) {
+            restartCount = 0;
+        }
+
+        // SIGINT = user pressed Ctrl+C on the launcher, don't restart
+        if (signal === 'SIGINT' || code === 0) {
+            console.log(`\n🛑 [Launcher] Server exited cleanly (code=${code}, signal=${signal}). Not restarting.`);
+            process.exit(0);
+        }
+
+        console.log(`\n⚠️  [Launcher] Server crashed after ${uptime}s (code=${code}, signal=${signal})`);
         scheduleRestart();
     });
 }
 
 function scheduleRestart() {
-    // Back-off: if it crashed in under 10s, wait 5s; otherwise restart immediately
-    const uptime = Date.now() - lastStartTime;
-    const delay = uptime < 10000 ? 5000 : 2000;
-    console.log(`🔄 [Launcher] Restarting in ${delay / 1000}s...`);
+    const delay = backoffDelay(restartCount);
+    console.log(`🔄 [Launcher] Restarting in ${(delay / 1000).toFixed(0)}s... (attempt ${restartCount})`);
     setTimeout(startServer, delay);
 }
 
-// Handle Ctrl+C on the launcher itself
+// Ctrl+C on the launcher shuts everything down
 process.on('SIGINT', () => {
     console.log('\n🛑 [Launcher] Shutting down...');
+    process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+    console.log('\n🛑 [Launcher] SIGTERM received, shutting down...');
     process.exit(0);
 });
 

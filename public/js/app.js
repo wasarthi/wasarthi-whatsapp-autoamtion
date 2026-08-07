@@ -1,5 +1,5 @@
 /* ═══════════════════════════════════════════════════════════
-   WhatsApp Automation Dashboard — Frontend Logic
+   WhatsApp Automation Dashboard — Frontend Logic v2
    ═══════════════════════════════════════════════════════════ */
 
 const API = '';
@@ -31,9 +31,9 @@ function showToast(message, type = 'info') {
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerHTML = `
-        <span class="toast-icon">${icons[type]}</span>
-        <span class="toast-text">${message}</span>
-        <button class="toast-close" onclick="this.parentElement.remove()">×</button>
+        <span class="toast-icon" aria-hidden="true">${icons[type]}</span>
+        <span class="toast-text">${escapeHtml(message)}</span>
+        <button class="toast-close" aria-label="Dismiss notification" onclick="this.parentElement.remove()">×</button>
     `;
     container.appendChild(toast);
 
@@ -43,13 +43,51 @@ function showToast(message, type = 'info') {
     }, 4000);
 }
 
+// ─── Error Banner ────────────────────────────────────────────
+function showErrorBanner(containerId, message, retryFn) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    el.style.display = 'flex';
+    el.innerHTML = `
+        <div class="error-banner" role="alert">
+            <span aria-hidden="true">⚠️</span>
+            <span>${escapeHtml(message)}</span>
+            ${retryFn ? `<button class="error-retry" type="button">Retry</button>` : ''}
+        </div>
+    `;
+    if (retryFn) {
+        el.querySelector('.error-retry').addEventListener('click', () => {
+            clearErrorBanner(containerId);
+            retryFn();
+        });
+    }
+}
+
+function clearErrorBanner(containerId) {
+    const el = document.getElementById(containerId);
+    if (el) { el.style.display = 'none'; el.innerHTML = ''; }
+}
+
+// ─── Skeleton Helpers ─────────────────────────────────────────
+function showSkeleton(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = '';
+}
+
+function hideSkeleton(id) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = 'none';
+}
+
 // ─── Navigation ─────────────────────────────────────────────
 function navigateTo(section) {
     currentSection = section;
 
-    // Update nav
+    // Update nav items
     document.querySelectorAll('.nav-item').forEach(item => {
-        item.classList.toggle('active', item.dataset.section === section);
+        const active = item.dataset.section === section;
+        item.classList.toggle('active', active);
+        item.setAttribute('aria-current', active ? 'page' : 'false');
     });
 
     // Show section
@@ -58,8 +96,12 @@ function navigateTo(section) {
     });
 
     // Close mobile sidebar
-    document.getElementById('sidebar').classList.remove('open');
-    document.getElementById('overlay').classList.remove('active');
+    const sidebar = document.getElementById('sidebar');
+    const overlay = document.getElementById('overlay');
+    const menuToggle = document.getElementById('menuToggle');
+    sidebar.classList.remove('open');
+    overlay.classList.remove('active');
+    if (menuToggle) menuToggle.setAttribute('aria-expanded', 'false');
 
     // Load section data
     loadSectionData(section);
@@ -68,47 +110,77 @@ function navigateTo(section) {
 function loadSectionData(section) {
     switch (section) {
         case 'dashboard': loadDashboard(); break;
-        case 'messages': loadMessages(); break;
-        case 'chatbot': loadChatbotRules(); break;
-        case 'contacts': loadContacts(); break;
+        case 'messages':  loadMessages();  break;
+        case 'chatbot':   loadChatbotRules(); break;
+        case 'contacts':  loadContacts(); break;
         case 'scheduled': loadScheduled(); break;
-        case 'settings': loadSettings(); break;
+        case 'settings':  loadSettings(); break;
     }
+}
+
+// ─── Settings Tab Switching ──────────────────────────────────
+function initSettingsTabs() {
+    const tabs = document.querySelectorAll('.settings-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            const target = tab.dataset.tab;
+
+            // Update tab buttons
+            tabs.forEach(t => {
+                t.classList.toggle('active', t === tab);
+                t.setAttribute('aria-selected', t === tab ? 'true' : 'false');
+            });
+
+            // Update panels
+            document.querySelectorAll('.settings-panel').forEach(panel => {
+                panel.classList.toggle('active', panel.id === `stab-${target}`);
+            });
+        });
+    });
 }
 
 // ═══════════════════════════════════════════════════════════
 //  DASHBOARD
 // ═══════════════════════════════════════════════════════════
 async function loadDashboard() {
+    clearErrorBanner('dashboardError');
     try {
         const stats = await api('/api/dashboard/stats');
 
         // Update demo mode indicator
         const indicator = document.getElementById('modeIndicator');
-        if (stats.demoMode) {
-            indicator.textContent = '🧪 Demo Mode';
-            indicator.style.color = '#f59e0b';
-        } else {
-            indicator.textContent = '🟢 Live';
-            indicator.style.color = '#25D366';
+        if (indicator) {
+            if (stats.demoMode) {
+                indicator.textContent = '🧪 Demo Mode';
+                indicator.style.color = 'var(--color-warning)';
+            } else {
+                indicator.textContent = '🟢 Live';
+                indicator.style.color = 'var(--color-primary-500)';
+            }
         }
 
         // Update stat cards with animation
-        animateValue('valSentToday', stats.sentToday);
+        animateValue('valSentToday',     stats.sentToday);
         animateValue('valReceivedToday', stats.receivedToday);
-        animateValue('valContacts', stats.totalContacts);
-        animateValue('valActiveRules', stats.activeRules);
+        animateValue('valContacts',      stats.totalContacts);
+        animateValue('valActiveRules',   stats.activeRules);
 
         // Recent activity
+        hideSkeleton('activitySkeleton');
         const activityEl = document.getElementById('recentActivity');
         if (stats.recentMessages.length === 0) {
-            activityEl.innerHTML = '<div class="empty-state">No messages yet. Send your first message! 🚀</div>';
+            activityEl.innerHTML = `
+                <div class="empty-state">
+                    <span class="empty-state-icon" aria-hidden="true">🚀</span>
+                    <div class="empty-state-title">No messages yet</div>
+                    <p>Send your first message to get started!</p>
+                </div>`;
         } else {
             activityEl.innerHTML = stats.recentMessages.map(msg => `
                 <div class="activity-item">
-                    <span class="activity-direction">${msg.direction === 'incoming' ? '📥' : '📤'}</span>
+                    <span class="activity-direction" aria-hidden="true">${msg.direction === 'incoming' ? '📥' : '📤'}</span>
                     <div class="activity-details">
-                        <div class="activity-phone">${msg.contact_name || msg.phone}</div>
+                        <div class="activity-phone">${escapeHtml(msg.contact_name || msg.phone)}</div>
                         <div class="activity-text">${escapeHtml(msg.body)}</div>
                     </div>
                     <span class="activity-time">${timeAgo(msg.created_at)}</span>
@@ -116,12 +188,14 @@ async function loadDashboard() {
             `).join('');
         }
     } catch (err) {
-        showToast('Failed to load dashboard', 'error');
+        hideSkeleton('activitySkeleton');
+        showErrorBanner('dashboardError', 'Failed to load dashboard data.', loadDashboard);
     }
 }
 
 function animateValue(elementId, target) {
     const el = document.getElementById(elementId);
+    if (!el) return;
     const start = parseInt(el.textContent) || 0;
     const duration = 600;
     const startTime = performance.now();
@@ -141,33 +215,48 @@ function animateValue(elementId, target) {
 //  MESSAGES
 // ═══════════════════════════════════════════════════════════
 async function loadMessages() {
+    clearErrorBanner('messagesError');
     try {
-        const phone = document.getElementById('messageSearch')?.value || '';
+        const phone     = document.getElementById('messageSearch')?.value || '';
         const direction = document.getElementById('messageFilter')?.value || '';
 
         let endpoint = '/api/messages?limit=200';
-        if (phone) endpoint += `&phone=${encodeURIComponent(phone)}`;
+        if (phone)     endpoint += `&phone=${encodeURIComponent(phone)}`;
         if (direction) endpoint += `&direction=${direction}`;
 
         const messages = await api(endpoint);
         const tbody = document.getElementById('messagesBody');
 
         if (messages.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No messages found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5">
+                        <div class="empty-state">
+                            <span class="empty-state-icon" aria-hidden="true">💬</span>
+                            <div class="empty-state-title">No messages found</div>
+                            <p>Try adjusting your search or filter.</p>
+                        </div>
+                    </td>
+                </tr>`;
             return;
         }
 
         tbody.innerHTML = messages.map(msg => `
             <tr>
                 <td><span class="badge badge-${msg.direction}">${msg.direction === 'incoming' ? '📥 In' : '📤 Out'}</span></td>
-                <td><strong>${msg.contact_name || msg.phone}</strong><br><small style="color:var(--text-muted)">${msg.phone}</small></td>
+                <td>
+                    <strong>${escapeHtml(msg.contact_name || msg.phone)}</strong>
+                    ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</small>` : ''}
+                </td>
                 <td><span class="msg-truncate">${escapeHtml(msg.body)}</span></td>
-                <td><span class="badge badge-${msg.status}">${msg.status}</span></td>
-                <td style="white-space:nowrap">${formatDate(msg.created_at)}</td>
+                <td><span class="badge badge-${msg.status}">${escapeHtml(msg.status)}</span></td>
+                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.created_at)}</td>
             </tr>
         `).join('');
     } catch (err) {
-        showToast('Failed to load messages', 'error');
+        showErrorBanner('messagesError', 'Failed to load messages.', loadMessages);
+        document.getElementById('messagesBody').innerHTML =
+            '<tr><td colspan="5" class="empty-state">Could not load messages.</td></tr>';
     }
 }
 
@@ -175,12 +264,20 @@ async function loadMessages() {
 //  CHATBOT RULES
 // ═══════════════════════════════════════════════════════════
 async function loadChatbotRules() {
+    clearErrorBanner('chatbotError');
+    showSkeleton('rulesSkeleton');
     try {
         const rules = await api('/api/chatbot/rules');
+        hideSkeleton('rulesSkeleton');
         const container = document.getElementById('rulesList');
 
         if (rules.length === 0) {
-            container.innerHTML = '<div class="empty-state">No chatbot rules yet. Add your first rule above! 🤖</div>';
+            container.innerHTML = `
+                <div class="empty-state">
+                    <span class="empty-state-icon" aria-hidden="true">🤖</span>
+                    <div class="empty-state-title">No chatbot rules yet</div>
+                    <p>Add your first rule above to get started!</p>
+                </div>`;
             return;
         }
 
@@ -189,28 +286,40 @@ async function loadChatbotRules() {
                 <div class="rule-info">
                     <div class="rule-trigger">
                         <span class="rule-keyword">"${escapeHtml(rule.trigger_keyword)}"</span>
-                        <span class="rule-match-type">${rule.match_type}</span>
+                        <span class="rule-match-type">${escapeHtml(rule.match_type)}</span>
                         ${!rule.is_active ? '<span class="badge badge-cancelled">Disabled</span>' : ''}
                     </div>
                     <div class="rule-response">${escapeHtml(rule.response_text)}</div>
                     <div class="rule-meta">
                         <span>Priority: ${rule.priority}</span>
-                        <span>•</span>
+                        <span aria-hidden="true">•</span>
                         <span>Hits: ${rule.hit_count}</span>
                     </div>
                 </div>
                 <div class="rule-actions">
-                    <button class="btn btn-sm btn-secondary" onclick="toggleRule(${rule.id}, ${rule.is_active ? 0 : 1})" title="${rule.is_active ? 'Disable' : 'Enable'}">
+                    <button
+                        class="btn btn-sm btn-secondary"
+                        onclick="toggleRule(${rule.id}, ${rule.is_active ? 0 : 1})"
+                        title="${rule.is_active ? 'Disable rule' : 'Enable rule'}"
+                        aria-label="${rule.is_active ? 'Disable' : 'Enable'} rule: ${escapeHtml(rule.trigger_keyword)}"
+                        type="button">
                         ${rule.is_active ? '⏸️' : '▶️'}
                     </button>
-                    <button class="btn btn-sm btn-danger" onclick="deleteRule(${rule.id})" title="Delete">
+                    <button
+                        class="btn btn-sm btn-danger"
+                        onclick="deleteRule(${rule.id})"
+                        title="Delete rule"
+                        aria-label="Delete rule: ${escapeHtml(rule.trigger_keyword)}"
+                        type="button">
                         🗑️
                     </button>
                 </div>
             </div>
         `).join('');
     } catch (err) {
-        showToast('Failed to load chatbot rules', 'error');
+        hideSkeleton('rulesSkeleton');
+        showErrorBanner('chatbotError', 'Failed to load chatbot rules.', loadChatbotRules);
+        document.getElementById('rulesList').innerHTML = '';
     }
 }
 
@@ -239,11 +348,15 @@ async function deleteRule(id) {
 }
 
 async function testChatbot() {
-    const input = document.getElementById('testMessage');
+    const input    = document.getElementById('testMessage');
     const resultEl = document.getElementById('testResult');
-    const text = input.value.trim();
+    const text     = input.value.trim();
 
     if (!text) { input.focus(); return; }
+
+    const btn = document.getElementById('testChatbotBtn');
+    btn.disabled = true;
+    btn.textContent = 'Testing…';
 
     try {
         const result = await api('/api/chatbot/test', {
@@ -257,7 +370,7 @@ async function testChatbot() {
             resultEl.className = 'test-result matched';
             resultEl.innerHTML = `
                 <strong>✅ Rule #${result.ruleId} matched!</strong><br>
-                <strong>Keyword:</strong> "${escapeHtml(result.keyword)}" (${result.matchType})<br>
+                <strong>Keyword:</strong> "${escapeHtml(result.keyword)}" (${escapeHtml(result.matchType)})<br>
                 <strong>Response:</strong> ${escapeHtml(result.response)}
             `;
         } else {
@@ -268,6 +381,9 @@ async function testChatbot() {
         }
     } catch (err) {
         showToast('Test failed', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'Test';
     }
 }
 
@@ -275,32 +391,47 @@ async function testChatbot() {
 //  CONTACTS
 // ═══════════════════════════════════════════════════════════
 async function loadContacts() {
+    clearErrorBanner('contactsError');
     try {
-        const search = document.getElementById('contactSearch')?.value || '';
-        let endpoint = '/api/contacts';
+        const search   = document.getElementById('contactSearch')?.value || '';
+        let endpoint   = '/api/contacts';
         if (search) endpoint += `?search=${encodeURIComponent(search)}`;
 
         const contacts = await api(endpoint);
-        const tbody = document.getElementById('contactsBody');
+        const tbody    = document.getElementById('contactsBody');
 
         if (contacts.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No contacts found</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5">
+                        <div class="empty-state">
+                            <span class="empty-state-icon" aria-hidden="true">👥</span>
+                            <div class="empty-state-title">No contacts found</div>
+                            <p>${search ? 'Try a different search term.' : 'Add your first contact above!'}</p>
+                        </div>
+                    </td>
+                </tr>`;
             return;
         }
 
         tbody.innerHTML = contacts.map(c => `
             <tr>
                 <td><strong>${escapeHtml(c.name) || '—'}</strong></td>
-                <td>${c.phone}</td>
+                <td style="color:var(--color-text-secondary)">${escapeHtml(c.phone)}</td>
                 <td>${c.label ? `<span class="badge badge-incoming">${escapeHtml(c.label)}</span>` : '—'}</td>
-                <td style="white-space:nowrap">${formatDate(c.created_at)}</td>
+                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(c.created_at)}</td>
                 <td>
-                    <button class="btn btn-sm btn-danger" onclick="deleteContact(${c.id})">🗑️</button>
+                    <button
+                        class="btn btn-sm btn-danger"
+                        onclick="deleteContact(${c.id})"
+                        title="Delete contact"
+                        aria-label="Delete contact ${escapeHtml(c.name || c.phone)}"
+                        type="button">🗑️</button>
                 </td>
             </tr>
         `).join('');
     } catch (err) {
-        showToast('Failed to load contacts', 'error');
+        showErrorBanner('contactsError', 'Failed to load contacts.', loadContacts);
     }
 }
 
@@ -319,31 +450,44 @@ async function deleteContact(id) {
 //  SCHEDULED MESSAGES
 // ═══════════════════════════════════════════════════════════
 async function loadScheduled() {
+    clearErrorBanner('scheduledError');
     try {
         const messages = await api('/api/scheduled');
-        const tbody = document.getElementById('scheduledBody');
+        const tbody    = document.getElementById('scheduledBody');
 
         if (messages.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No scheduled messages</td></tr>';
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5">
+                        <div class="empty-state">
+                            <span class="empty-state-icon" aria-hidden="true">⏰</span>
+                            <div class="empty-state-title">No scheduled messages</div>
+                            <p>Schedule your first message above!</p>
+                        </div>
+                    </td>
+                </tr>`;
             return;
         }
 
         tbody.innerHTML = messages.map(msg => `
             <tr>
-                <td>${msg.phone}</td>
+                <td style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</td>
                 <td><span class="msg-truncate">${escapeHtml(msg.body)}</span></td>
-                <td style="white-space:nowrap">${formatDate(msg.scheduled_at)}</td>
-                <td><span class="badge badge-${msg.status}">${msg.status}</span></td>
+                <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.scheduled_at)}</td>
+                <td>
+                    <span class="pill pill-${msg.status === 'pending' ? 'pending' : msg.status === 'sent' ? 'active' : 'error'}">
+                        ${escapeHtml(msg.status)}
+                    </span>
+                </td>
                 <td>
                     ${msg.status === 'pending'
-                        ? `<button class="btn btn-sm btn-danger" onclick="cancelScheduled(${msg.id})">Cancel</button>`
-                        : '—'
-                    }
+                        ? `<button class="btn btn-sm btn-danger" onclick="cancelScheduled(${msg.id})" aria-label="Cancel scheduled message" type="button">Cancel</button>`
+                        : '—'}
                 </td>
             </tr>
         `).join('');
     } catch (err) {
-        showToast('Failed to load scheduled messages', 'error');
+        showErrorBanner('scheduledError', 'Failed to load scheduled messages.', loadScheduled);
     }
 }
 
@@ -365,94 +509,81 @@ async function loadSettings() {
     try {
         const settings = await api('/api/settings');
 
-        document.getElementById('settBusinessName').value = settings.business_name || '';
-        document.getElementById('settChatbotEnabled').checked = settings.chatbot_enabled === 'true';
-        document.getElementById('settDefaultReply').value = settings.default_reply || '';
-        document.getElementById('settAwayMode').checked = settings.away_mode === 'true';
-        document.getElementById('settAwayMessage').value = settings.away_message || '';
-        document.getElementById('settWelcomeMessage').value = settings.welcome_message || '';
+        const set = (id, val) => {
+            const el = document.getElementById(id);
+            if (!el) return;
+            if (el.type === 'checkbox') el.checked = val === 'true';
+            else el.value = val || '';
+        };
 
-        // AI Settings
-        const elAiEnabled = document.getElementById('settAiEnabled');
-        if (elAiEnabled) elAiEnabled.checked = settings.ai_enabled === 'true';
-        
-        const elOwnerName = document.getElementById('settOwnerName');
-        if (elOwnerName) elOwnerName.value = settings.owner_name || '';
-
-        const elAiMode = document.getElementById('settAiMode');
-        if (elAiMode) elAiMode.value = settings.ai_mode || 'ai_first';
-
-        const elAiPrompt = document.getElementById('settAiSystemPrompt');
-        if (elAiPrompt) elAiPrompt.value = settings.ai_system_prompt || '';
-        
-        const elGemini = document.getElementById('settGeminiApiKey');
-        if (elGemini) elGemini.value = settings.gemini_api_key || '';
+        set('settBusinessName',   settings.business_name);
+        set('settChatbotEnabled', settings.chatbot_enabled);
+        set('settDefaultReply',   settings.default_reply);
+        set('settAwayMode',       settings.away_mode);
+        set('settAwayMessage',    settings.away_message);
+        set('settWelcomeMessage', settings.welcome_message);
+        set('settAiEnabled',      settings.ai_enabled);
+        set('settOwnerName',      settings.owner_name);
+        set('settAiMode',         settings.ai_mode || 'ai_first');
+        set('settAiSystemPrompt', settings.ai_system_prompt);
+        set('settGeminiApiKey',   settings.gemini_api_key);
     } catch (err) {
         showToast('Failed to load settings', 'error');
     }
 }
 
+// ─── QR / SSE ────────────────────────────────────────────────
 function initSSE() {
     const eventSource = new EventSource('/api/qr-stream');
-    
-    eventSource.onmessage = function(event) {
+
+    eventSource.onmessage = function (event) {
         try {
-            const data = JSON.parse(event.data);
-            const qrLoading = document.getElementById('qrLoading');
-            const qrImage = document.getElementById('qrImage');
-            const qrSuccess = document.getElementById('qrSuccess');
-            const statusDot = document.querySelector('#connectionStatus .status-dot');
-            const statusText = document.querySelector('#connectionStatus .status-text');
-            const connectionInfo = document.getElementById('connectionInfo');
-            
+            const data        = JSON.parse(event.data);
+            const qrLoading   = document.getElementById('qrLoading');
+            const qrImage     = document.getElementById('qrImage');
+            const qrSuccess   = document.getElementById('qrSuccess');
+            const statusDot   = document.querySelector('#connectionStatus .status-dot');
+            const statusText  = document.querySelector('#connectionStatus .status-text');
+            const connInfo    = document.getElementById('connectionInfo');
+
+            const show = (el) => { if (el) el.style.display = ''; };
+            const hide = (el) => { if (el) el.style.display = 'none'; };
+
             if (data.type === 'qr') {
+                show(qrLoading); hide(qrImage); hide(qrSuccess);
+                if (qrImage) { qrImage.src = data.data; qrImage.style.display = 'block'; }
                 if (qrLoading) qrLoading.style.display = 'none';
-                if (qrImage) {
-                    qrImage.style.display = 'block';
-                    qrImage.src = data.data;
-                }
-                if (qrSuccess) qrSuccess.style.display = 'none';
-                
-                if (statusDot) statusDot.className = 'status-dot error';
+                if (statusDot)  statusDot.className  = 'status-dot error';
                 if (statusText) statusText.textContent = 'Scan QR Code';
-                if (connectionInfo) connectionInfo.innerHTML = '<p style="color:#f59e0b">⚠️ Waiting for QR Code Scan. Check Settings.</p>';
+                if (connInfo)   connInfo.innerHTML   = '<p style="color:var(--color-warning)">⚠️ Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>';
+
             } else if (data.type === 'ready') {
-                if (qrLoading) qrLoading.style.display = 'none';
-                if (qrImage) qrImage.style.display = 'none';
-                if (qrSuccess) qrSuccess.style.display = 'block';
-                
-                if (statusDot) statusDot.className = 'status-dot connected';
+                hide(qrLoading); hide(qrImage); show(qrSuccess);
+                if (statusDot)  statusDot.className  = 'status-dot connected';
                 if (statusText) statusText.textContent = 'Connected';
-                if (connectionInfo) {
-                    connectionInfo.innerHTML = `
-                        <p class="connected">✅ Connected to WhatsApp</p>
-                        <p>Phone: ${data.phone}</p>
-                    `;
-                }
+                if (connInfo)   connInfo.innerHTML   = `
+                    <p class="connected-text">✅ Connected to WhatsApp</p>
+                    <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
+
             } else if (data.type === 'disconnected' || data.type === 'error') {
-                if (qrLoading) qrLoading.style.display = 'block';
-                if (qrImage) qrImage.style.display = 'none';
-                if (qrSuccess) qrSuccess.style.display = 'none';
-                
-                if (statusDot) statusDot.className = 'status-dot error';
+                show(qrLoading); hide(qrImage); hide(qrSuccess);
+                if (statusDot)  statusDot.className  = 'status-dot error';
                 if (statusText) statusText.textContent = 'Disconnected';
-                if (connectionInfo) connectionInfo.innerHTML = '<p style="color:var(--red)">❌ Not connected</p>';
+                if (connInfo)   connInfo.innerHTML   = '<p style="color:var(--color-error)">❌ Not connected</p>';
+
             } else if (data.type === 'loading') {
-                if (qrLoading) qrLoading.style.display = 'block';
-                if (qrImage) qrImage.style.display = 'none';
-                if (qrSuccess) qrSuccess.style.display = 'none';
-                
-                if (statusDot) statusDot.className = 'status-dot demo';
-                if (statusText) statusText.textContent = 'Initializing...';
-                if (connectionInfo) connectionInfo.innerHTML = '<p>Loading WhatsApp Client...</p>';
+                show(qrLoading); hide(qrImage); hide(qrSuccess);
+                if (statusDot)  statusDot.className  = 'status-dot demo';
+                if (statusText) statusText.textContent = 'Initializing…';
+                if (connInfo)   connInfo.innerHTML   = '<p>Loading WhatsApp Client…</p>';
             }
         } catch (e) {
-            console.error('SSE Error processing:', e);
+            console.error('SSE parse error:', e);
         }
     };
 
-    eventSource.onerror = function() {
-        console.error('SSE connection lost. Browser will auto-reconnect.');
+    eventSource.onerror = function () {
+        console.warn('SSE connection lost — browser will auto-reconnect.');
     };
 }
 
@@ -460,15 +591,16 @@ function initSSE() {
 //  UTILITIES
 // ═══════════════════════════════════════════════════════════
 function escapeHtml(str) {
-    if (!str) return '';
+    if (str == null) return '';
     const div = document.createElement('div');
-    div.textContent = str;
+    div.textContent = String(str);
     return div.innerHTML;
 }
 
 function formatDate(dateStr) {
     if (!dateStr) return '—';
     const d = new Date(dateStr + (dateStr.includes('Z') || dateStr.includes('+') ? '' : 'Z'));
+    if (isNaN(d)) return '—';
     return d.toLocaleDateString('en-IN', {
         day: '2-digit', month: 'short', year: 'numeric',
         hour: '2-digit', minute: '2-digit'
@@ -478,23 +610,24 @@ function formatDate(dateStr) {
 function timeAgo(dateStr) {
     if (!dateStr) return '';
     const d = new Date(dateStr + (dateStr.includes('Z') || dateStr.includes('+') ? '' : 'Z'));
-    const now = new Date();
-    const diffMs = now - d;
-    const diffMins = Math.floor(diffMs / 60000);
-
-    if (diffMins < 1) return 'Just now';
+    if (isNaN(d)) return '';
+    const diffMins = Math.floor((Date.now() - d) / 60000);
+    if (diffMins < 1)  return 'Just now';
     if (diffMins < 60) return `${diffMins}m ago`;
     const diffHrs = Math.floor(diffMins / 60);
-    if (diffHrs < 24) return `${diffHrs}h ago`;
-    const diffDays = Math.floor(diffHrs / 24);
-    return `${diffDays}d ago`;
+    if (diffHrs < 24)  return `${diffHrs}h ago`;
+    return `${Math.floor(diffHrs / 24)}d ago`;
 }
 
 // ═══════════════════════════════════════════════════════════
 //  EVENT LISTENERS
 // ═══════════════════════════════════════════════════════════
 document.addEventListener('DOMContentLoaded', () => {
-    // Navigation
+
+    // ── Settings tabs ──────────────────────────────────────
+    initSettingsTabs();
+
+    // ── Navigation ─────────────────────────────────────────
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', (e) => {
             e.preventDefault();
@@ -502,23 +635,39 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // Mobile menu
-    document.getElementById('menuToggle').addEventListener('click', () => {
-        document.getElementById('sidebar').classList.toggle('open');
-        document.getElementById('overlay').classList.toggle('active');
+    // ── Mobile menu ─────────────────────────────────────────
+    const menuToggle = document.getElementById('menuToggle');
+    const sidebar    = document.getElementById('sidebar');
+    const overlay    = document.getElementById('overlay');
+
+    menuToggle.addEventListener('click', () => {
+        const isOpen = sidebar.classList.toggle('open');
+        overlay.classList.toggle('active', isOpen);
+        menuToggle.setAttribute('aria-expanded', String(isOpen));
     });
 
-    document.getElementById('overlay').addEventListener('click', () => {
-        document.getElementById('sidebar').classList.remove('open');
-        document.getElementById('overlay').classList.remove('active');
+    overlay.addEventListener('click', () => {
+        sidebar.classList.remove('open');
+        overlay.classList.remove('active');
+        menuToggle.setAttribute('aria-expanded', 'false');
     });
 
-    // Quick send form
+    // ── Topbar refresh ──────────────────────────────────────
+    document.getElementById('refreshBtn')?.addEventListener('click', () => {
+        loadSectionData(currentSection);
+        showToast('Refreshed', 'info');
+    });
+
+    // ── Quick send form ─────────────────────────────────────
     document.getElementById('quickSendForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const phone = document.getElementById('qsPhone').value.trim();
+        const phone   = document.getElementById('qsPhone').value.trim();
         const message = document.getElementById('qsMessage').value.trim();
         if (!phone || !message) return;
+
+        const btn = document.getElementById('quickSendBtn');
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
 
         try {
             await api('/api/messages/send', {
@@ -526,23 +675,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ phone, body: message })
             });
             showToast(`Message sent to ${phone}`, 'success');
-            document.getElementById('qsPhone').value = '';
-            document.getElementById('qsMessage').value = '';
+            document.getElementById('qsPhone').value    = '';
+            document.getElementById('qsMessage').value  = '';
             loadDashboard();
         } catch (err) {
             showToast(err.message || 'Failed to send message', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<span class="btn-icon" aria-hidden="true">📨</span> Send Message';
         }
     });
 
-    // Add chatbot rule form
+    // ── Add chatbot rule ────────────────────────────────────
     document.getElementById('addRuleForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const trigger_keyword = document.getElementById('ruleTrigger').value.trim();
-        const match_type = document.getElementById('ruleMatchType').value;
-        const response_text = document.getElementById('ruleResponse').value.trim();
-        const priority = parseInt(document.getElementById('rulePriority').value) || 0;
+        const match_type      = document.getElementById('ruleMatchType').value;
+        const response_text   = document.getElementById('ruleResponse').value.trim();
+        const priority        = parseInt(document.getElementById('rulePriority').value) || 0;
 
         if (!trigger_keyword || !response_text) return;
+
+        const btn = e.target.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Adding…';
 
         try {
             await api('/api/chatbot/rules', {
@@ -555,23 +711,30 @@ document.addEventListener('DOMContentLoaded', () => {
             loadChatbotRules();
         } catch (err) {
             showToast('Failed to add rule', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Add Rule';
         }
     });
 
-    // Test chatbot
+    // ── Test chatbot ────────────────────────────────────────
     document.getElementById('testChatbotBtn').addEventListener('click', testChatbot);
-    document.getElementById('testMessage').addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') testChatbot();
+    document.getElementById('testMessage').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); testChatbot(); }
     });
 
-    // Add contact form
+    // ── Add contact form ────────────────────────────────────
     document.getElementById('addContactForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const phone = document.getElementById('contactPhone').value.trim();
-        const name = document.getElementById('contactName').value.trim();
+        const name  = document.getElementById('contactName').value.trim();
         const label = document.getElementById('contactLabel').value.trim();
 
         if (!phone) return;
+
+        const btn = e.target.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Adding…';
 
         try {
             await api('/api/contacts', {
@@ -583,17 +746,20 @@ document.addEventListener('DOMContentLoaded', () => {
             loadContacts();
         } catch (err) {
             showToast('Failed to add contact', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Add Contact';
         }
     });
 
-    // Contact search
+    // ── Contact search ──────────────────────────────────────
     let contactSearchTimeout;
     document.getElementById('contactSearch').addEventListener('input', () => {
         clearTimeout(contactSearchTimeout);
         contactSearchTimeout = setTimeout(loadContacts, 300);
     });
 
-    // Message search & filter
+    // ── Message search & filter ─────────────────────────────
     let messageSearchTimeout;
     document.getElementById('messageSearch').addEventListener('input', () => {
         clearTimeout(messageSearchTimeout);
@@ -601,14 +767,18 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('messageFilter').addEventListener('change', loadMessages);
 
-    // Schedule message form
+    // ── Schedule message form ───────────────────────────────
     document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const phone = document.getElementById('schedPhone').value.trim();
-        const body = document.getElementById('schedMessage').value.trim();
+        const phone        = document.getElementById('schedPhone').value.trim();
+        const body         = document.getElementById('schedMessage').value.trim();
         const scheduled_at = document.getElementById('schedDate').value;
 
         if (!phone || !body || !scheduled_at) return;
+
+        const btn = e.target.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Scheduling…';
 
         try {
             await api('/api/scheduled', {
@@ -620,36 +790,45 @@ document.addEventListener('DOMContentLoaded', () => {
             loadScheduled();
         } catch (err) {
             showToast('Failed to schedule message', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Schedule Message';
         }
     });
 
-    // Settings form
+    // ── Settings (General) form ─────────────────────────────
     document.getElementById('settingsForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const btn = document.getElementById('saveSettingsBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
         try {
             await api('/api/settings', {
                 method: 'PUT',
                 body: JSON.stringify({
-                    business_name: document.getElementById('settBusinessName')?.value || '',
+                    business_name:   document.getElementById('settBusinessName')?.value  || '',
                     chatbot_enabled: document.getElementById('settChatbotEnabled')?.checked ? 'true' : 'false',
-                    default_reply: document.getElementById('settDefaultReply')?.value || '',
-                    away_mode: document.getElementById('settAwayMode')?.checked ? 'true' : 'false',
-                    away_message: document.getElementById('settAwayMessage')?.value || '',
+                    default_reply:   document.getElementById('settDefaultReply')?.value  || '',
+                    away_mode:       document.getElementById('settAwayMode')?.checked    ? 'true' : 'false',
+                    away_message:    document.getElementById('settAwayMessage')?.value   || '',
                     welcome_message: document.getElementById('settWelcomeMessage')?.value || ''
                 })
             });
             showToast('Settings saved!', 'success');
         } catch (err) {
             showToast('Failed to save settings', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save Settings';
         }
     });
 
-    // Persona Preset buttons
+    // ── Persona Preset buttons ──────────────────────────────
     const PRESETS = {
-        casual: `You are a real, friendly AI chatting on WhatsApp on behalf of your owner.\n- Talk naturally, casually, and warmly, just like a real person texting on WhatsApp.\n- Keep responses short (1-3 sentences), concise, and conversational.\n- Answer questions directly, chat with friends or clients, and be helpful.\n- If someone asks personal details you don't know, politely say you'll let the owner know.\n- Use occasional emojis naturally 😊.`,
-        assistant: `You are the personal AI assistant for your owner on WhatsApp.\n- Politely assist whoever is reaching out.\n- Help answer common questions, take down messages, or provide useful details.\n- If urgent, ask them to leave a clear note so the owner can follow up directly.\n- Maintain a polite, helpful, and organized tone.`,
+        casual:       `You are a real, friendly AI chatting on WhatsApp on behalf of your owner.\n- Talk naturally, casually, and warmly, just like a real person texting on WhatsApp.\n- Keep responses short (1-3 sentences), concise, and conversational.\n- Answer questions directly, chat with friends or clients, and be helpful.\n- If someone asks personal details you don't know, politely say you'll let the owner know.\n- Use occasional emojis naturally 😊.`,
+        assistant:    `You are the personal AI assistant for your owner on WhatsApp.\n- Politely assist whoever is reaching out.\n- Help answer common questions, take down messages, or provide useful details.\n- If urgent, ask them to leave a clear note so the owner can follow up directly.\n- Maintain a polite, helpful, and organized tone.`,
         professional: `You are an AI replying on WhatsApp for professional and business communications.\n- Respond with clarity, courtesy, and efficiency.\n- Keep answers crisp, structured, and informative.\n- If asked for estimates, bookings, or confidential info, politely request their contact details/requirements so the owner can review.`,
-        short: `You are texting on WhatsApp on behalf of your owner.\n- Keep all replies extremely short (1 sentence or a few words max).\n- Direct, friendly, and concise. No fluff or extra explanations.`
+        short:        `You are texting on WhatsApp on behalf of your owner.\n- Keep all replies extremely short (1 sentence or a few words max).\n- Direct, friendly, and concise. No fluff or extra explanations.`
     };
 
     document.querySelectorAll('.preset-btn').forEach(btn => {
@@ -663,37 +842,63 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    // AI Settings form
+    // ── AI Settings form ────────────────────────────────────
     document.getElementById('aiSettingsForm')?.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const btn = document.getElementById('saveAiBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
         try {
-            const aiEnabled = document.getElementById('settAiEnabled')?.checked ? 'true' : 'false';
-            const ownerName = document.getElementById('settOwnerName')?.value || '';
-            const aiMode = document.getElementById('settAiMode')?.value || 'ai_first';
-            const aiPrompt = document.getElementById('settAiSystemPrompt')?.value || '';
-            const geminiKey = document.getElementById('settGeminiApiKey')?.value || '';
-            
             await api('/api/settings', {
                 method: 'PUT',
                 body: JSON.stringify({
-                    ai_enabled: aiEnabled,
-                    owner_name: ownerName,
-                    ai_mode: aiMode,
-                    ai_system_prompt: aiPrompt,
-                    gemini_api_key: geminiKey
+                    ai_enabled:       document.getElementById('settAiEnabled')?.checked   ? 'true' : 'false',
+                    owner_name:       document.getElementById('settOwnerName')?.value     || '',
+                    ai_mode:          document.getElementById('settAiMode')?.value        || 'ai_first',
+                    ai_system_prompt: document.getElementById('settAiSystemPrompt')?.value || '',
+                    gemini_api_key:   document.getElementById('settGeminiApiKey')?.value  || ''
                 })
             });
             showToast('AI Persona Settings saved!', 'success');
         } catch (err) {
             showToast('Failed to save AI settings', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save AI Persona Settings';
         }
     });
 
-    // Initial load
+    // ── Danger Zone buttons ─────────────────────────────────
+    document.getElementById('pauseChatbotBtn')?.addEventListener('click', async () => {
+        if (!confirm('Pause the chatbot? Auto-replies will stop until you re-enable it in General settings.')) return;
+        try {
+            await api('/api/settings', {
+                method: 'PUT',
+                body: JSON.stringify({ chatbot_enabled: 'false' })
+            });
+            // Reflect in General tab
+            const el = document.getElementById('settChatbotEnabled');
+            if (el) el.checked = false;
+            showToast('Chatbot paused', 'success');
+        } catch (err) {
+            showToast('Failed to pause chatbot', 'error');
+        }
+    });
+
+    document.getElementById('clearMessagesBtn')?.addEventListener('click', () => {
+        // No backend endpoint yet; warn user
+        showToast('Clear messages is not yet implemented on the server.', 'info');
+    });
+
+    document.getElementById('disconnectBtn')?.addEventListener('click', () => {
+        showToast('Disconnect: please restart the server to log out of WhatsApp.', 'info');
+    });
+
+    // ── Initial load ────────────────────────────────────────
     loadDashboard();
     initSSE();
 
-    // Auto-refresh dashboard every 30 seconds
+    // ── Auto-refresh dashboard every 30 s ───────────────────
     setInterval(() => {
         if (currentSection === 'dashboard') loadDashboard();
     }, 30000);
