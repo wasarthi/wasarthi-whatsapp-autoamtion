@@ -1,72 +1,80 @@
-# WhatsApp Automation & AI Assistant Platform 🚀
+# WhatsApp Automation & AI Assistant 🤖
 
-An intelligent WhatsApp Business & Web Automation suite powered by **Node.js**, **Google Gemini AI**, and **whatsapp-web.js** / **WhatsApp Cloud API**, featuring a modern real-time Web Dashboard for managing chats, automated responses, scheduled broadcasts, and analytics.
+A self-hosted WhatsApp automation bot with a real-time admin dashboard. Powered by **Node.js**, **Google Gemini AI**, and **whatsapp-web.js**.
 
 ---
 
 ## ✨ Features
 
-- 🤖 **Gemini AI Intelligent Responses**: Smart automated answering system with customizable personas and prompt directives.
-- 📱 **QR Code Web Client Pairing**: Instant WhatsApp Web connection via real-time QR code display in the browser.
-- 💬 **Live Chat & Admin Dashboard**: Monitor conversations, manage contacts, view analytics, and trigger manual or automated actions.
-- 📅 **Scheduled Broadcasts**: Schedule messages and marketing campaigns with cron-based triggers.
-- 🔒 **Secure Multi-Device Auth**: Persistent session management with automatic credential caching.
-- 💾 **Embedded SQLite Database**: Lightweight zero-configuration persistent storage with `sql.js`.
-- 🔌 **WhatsApp Cloud API & Webhook Support**: Ready for Meta Cloud API integration.
+- 🤖 **Gemini AI Replies** — Responds to WhatsApp messages naturally on your behalf using Google Gemini.
+- 📱 **QR Code Login** — Connect your WhatsApp account by scanning a QR code in the dashboard.
+- 💬 **Admin Dashboard** — Manage conversations, contacts, chatbot rules, and scheduled messages from a web UI.
+- 📅 **Scheduled Messages** — Schedule broadcasts to any contact with automatic delivery.
+- 🔑 **Keyword Rules** — Set up keyword-triggered auto-replies with exact, contains, startswith, or regex matching.
+- 💾 **Persistent SQLite Database** — All your data is saved locally. No external database needed.
+- 🔄 **Crash-Proof** — Automatic restart with exponential back-off if anything goes wrong.
 
 ---
 
-## 🛠️ Tech Stack
+## 🛠️ Requirements
 
-- **Backend**: Node.js, Express.js
-- **WhatsApp Integration**: `whatsapp-web.js` & WhatsApp Business Cloud API (Axios)
-- **AI Engine**: Google Gemini AI (`@google/genai`)
-- **Database**: SQLite (`sql.js`)
-- **Frontend Dashboard**: HTML5, Modern Vanilla CSS, JavaScript, QR Code Generator
+Before running, make sure you have:
+
+- [Node.js](https://nodejs.org/) v18 or higher — **required**
+- [Git](https://git-scm.com/) — to clone the repo
+- A Google account with a [Gemini API key](https://aistudio.google.com/app/apikey) — for AI replies (free)
 
 ---
 
-## 🚀 Quick Start Guide
+## 🚀 Quick Start
 
-### 1. Clone the Repository
+### 1. Clone the repository
 ```bash
 git clone https://github.com/vedicagrawal12/whatsapp-automation.git
 cd whatsapp-automation
 ```
 
-### 2. Install Dependencies
+### 2. Install dependencies
 ```bash
 npm install
 ```
 
-### 3. Configure Environment Variables
-Copy the example environment file and fill in your keys:
+> ⚠️ On **Linux/Mac servers**, Chrome requires extra system packages. Run:
+> ```bash
+> sudo apt-get install -y ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 libgcc1 libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 lsb-release wget xdg-utils
+> ```
+
+### 3. Configure your environment
+Copy the example config file and fill in your Gemini API key:
 ```bash
+# Windows (Command Prompt)
+copy .env.example .env
+
+# Mac / Linux
 cp .env.example .env
 ```
 
-Edit `.env` with your preferred settings:
+Then open `.env` and set your Gemini API key:
 ```env
 PORT=3000
 DEMO_MODE=false
 GEMINI_API_KEY=your_gemini_api_key_here
-
-# (Optional) If using Meta WhatsApp Cloud API:
-WHATSAPP_TOKEN=your_permanent_system_user_token_here
-WHATSAPP_PHONE_ID=your_phone_number_id_here
-WHATSAPP_BUSINESS_ID=your_business_account_id_here
-WEBHOOK_VERIFY_TOKEN=my_secret_verify_token_123
 ```
 
-### 4. Run the Application
+Get a free API key at: https://aistudio.google.com/app/apikey
+
+### 4. Start the server
 ```bash
-npm start
+npm run dev
 ```
-Then open your browser and navigate to:
-```
-http://localhost:3000
-```
-Scan the QR code displayed on screen with your WhatsApp mobile app (**Linked Devices > Link a Device**) to activate automation.
+
+### 5. Open the dashboard
+Navigate to **http://localhost:3000** in your browser.
+
+Go to **Settings → WhatsApp QR** and scan the QR code with your WhatsApp mobile app:
+- Open WhatsApp → tap the three dots (⋮) → **Linked Devices** → **Link a Device** → scan the QR.
+
+Once scanned, the bot is live and will automatically reply to incoming messages using Gemini AI!
 
 ---
 
@@ -74,33 +82,32 @@ Scan the QR code displayed on screen with your WhatsApp mobile app (**Linked Dev
 
 ```
 whatsapp-automation/
-├── .env.example            # Sample configuration file
-├── .gitignore              # Ignored files (auth sessions, db, node_modules)
-├── package.json            # Node.js dependencies & scripts
-├── launcher.js             # Main application launcher
-├── server.js               # Express API and static server
-├── fix_db.js               # Database migration & integrity helper
-├── public/                 # Web Dashboard interface
-│   ├── index.html          # Main dashboard UI
-│   └── ...
+├── .env.example          # Template for your environment config
+├── .gitignore            # Ignores secrets, session data, and database
+├── package.json          # Node.js dependencies & scripts
+├── launcher.js           # Crash-proof server wrapper (exponential back-off)
+├── server.js             # Express HTTP server & API
+├── public/               # Web dashboard (HTML, CSS, JS)
+│   └── index.html
 └── src/
-    ├── ai.js               # Google Gemini AI agent logic
-    ├── chatbot.js          # Automated conversation flow rules
-    ├── database.js         # SQLite database operations
-    ├── scheduler.js        # Cron scheduling service
-    ├── whatsapp-client.js  # whatsapp-web.js client handler
-    ├── whatsapp.js         # WhatsApp Cloud API client
-    └── routes/             # Express API endpoints
+    ├── ai.js             # Google Gemini AI integration
+    ├── chatbot.js        # Message processing & rule matching
+    ├── database.js       # SQLite database (sql.js)
+    ├── scheduler.js      # Cron-based scheduled message delivery
+    ├── whatsapp-client.js # whatsapp-web.js client & session management
+    └── routes/
+        └── api.js        # REST API endpoints
 ```
 
 ---
 
-## 🔒 Security Best Practices
+## 🔒 Security Notes
 
-- **Never commit `.env` or `.wwebjs_auth/` folders.** These contain sensitive authentication tokens and private credentials.
-- The repository's `.gitignore` is pre-configured to keep your credentials and database safe.
+- **Never share your `.env` file.** It contains your API key.
+- **Never commit `.wwebjs_auth/`** — it contains your WhatsApp session tokens.
+- The `.gitignore` is pre-configured to protect all sensitive files automatically.
 
 ---
 
 ## 📄 License
-MIT License. Feel free to use and customize for your projects!
+MIT License. Free to use and customise for personal or business projects.

@@ -146,18 +146,6 @@ async function initDatabase() {
         db.run('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)', [key, value]);
     }
 
-    // Force away_mode to 'false' and ai_mode to 'ai_first' so AI persona handles all chat
-    db.run("UPDATE settings SET value = 'false' WHERE key = 'away_mode'");
-    db.run("UPDATE settings SET value = 'ai_first' WHERE key = 'ai_mode'");
-    db.run("UPDATE settings SET value = 'true' WHERE key = 'ai_enabled'");
-
-    // Force-reset the system prompt to remove any old offline/away-mode text
-    db.run(`UPDATE settings SET value = ? WHERE key = 'ai_system_prompt' AND value LIKE '%offline%'`,
-        ["You are a friendly, natural AI texting on WhatsApp on behalf of the account owner.\n\nGuidelines:\n- Talk naturally, casually, and warmly just like a real person texting on WhatsApp.\n- Keep replies brief (1-3 sentences max) and conversational.\n- Do NOT sound like a robot or a corporate auto-responder.\n- Never say you are an AI or mention business hours unless explicitly told.\n- If asked something personal you don't know, say you'll let the owner know.\n- Use occasional emojis naturally 😊."]);
-
-    // Disable any conflicting generic greeting rules so AI takes priority
-    db.run("UPDATE chatbot_rules SET is_active = 0");
-
     persist();
     return db;
 }
