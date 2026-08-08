@@ -10,9 +10,12 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 
-# SQLite Database & Local Data
-data/*.db
-data/*.db-journal
+# SQLite Database & Local Data + the auto-generated session-signing secret
+# (data/.session_secret signs every login cookie — if it ever leaked into a
+# commit, anyone with it could forge a valid session for ANY account,
+# including admin. Ignore the whole data/ folder, not just *.db, so nothing
+# added under it in the future gets missed the way this one nearly was.)
+data/
 *.sqlite
 *.db
 

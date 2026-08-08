@@ -45,12 +45,12 @@ async function processPendingMessages() {
         try {
             // Timeout guard: don't let a single message block the whole scheduler
             const result = await Promise.race([
-                sendTextMessage(msg.phone, msg.body),
+                sendTextMessage(msg.user_id, msg.phone, msg.body),
                 new Promise((_, rej) => setTimeout(() => rej(new Error('sendTextMessage timeout')), 20000))
             ]);
 
             try {
-                logMessage({
+                logMessage(msg.user_id, {
                     waMessageId: result?.id?._serialized || null,
                     phone: msg.phone,
                     direction: 'outgoing',

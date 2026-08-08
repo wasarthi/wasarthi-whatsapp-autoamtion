@@ -1,0 +1,5 @@
+# Replace with your real domain before deploying. Caddy handles the entire
+# HTTPS certificate (Let's Encrypt) automatically — nothing else to configure.
+yourdomain.com {
+    reverse_proxy app:3000
+}

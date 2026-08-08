@@ -1,30 +1,29 @@
 const { GoogleGenAI } = require('@google/genai');
 
 const { getSetting } = require('./database');
+const { getBusinessContext } = require('./business');
 
-let aiClient = null;
-
-function initAi() {
-    const apiKey = getSetting('gemini_api_key') || process.env.GEMINI_API_KEY;
+function initAi(userId) {
+    const apiKey = getSetting(userId, 'gemini_api_key') || process.env.GEMINI_API_KEY;
     if (apiKey && apiKey !== 'your_gemini_api_key_here' && apiKey.trim() !== '') {
-        aiClient = new GoogleGenAI({ apiKey: apiKey.trim() });
         console.log('   🔑 Gemini API key loaded OK (length:', apiKey.trim().length, ')');
-    } else {
-        aiClient = null;
-        console.error('   ❌ Gemini API key is MISSING or not set in Settings!');
+        return new GoogleGenAI({ apiKey: apiKey.trim() });
     }
+    console.error('   ❌ Gemini API key is MISSING or not set in Settings!');
+    return null;
 }
 
 /**
  * Generates an AI reply using Google Gemini
+ * @param {number} userId - The account this reply is being generated for
  * @param {string} systemPrompt - The behavior instructions for the AI
  * @param {Array} conversationHistory - Array of previous messages { direction, body }
  * @param {string} contactName - The name of the person we are talking to
  * @param {string} phone - The phone number of the contact
  * @returns {Promise<string>} The AI's response text
  */
-async function generateReply(systemPrompt, conversationHistory, contactName = '', phone = '') {
-    initAi();
+async function generateReply(userId, systemPrompt, conversationHistory, contactName = '', phone = '') {
+    const aiClient = initAi(userId);
 
     if (!aiClient) {
         console.error('❌ Gemini API key is missing or invalid.');
@@ -32,8 +31,8 @@ async function generateReply(systemPrompt, conversationHistory, contactName = ''
     }
 
     try {
-        const ownerName = getSetting('owner_name') || 'the account owner';
-        const businessName = getSetting('business_name') || '';
+        const ownerName = getSetting(userId, 'owner_name') || 'the account owner';
+        const businessName = getSetting(userId, 'business_name') || '';
 
         const defaultPrompt = `You are a friendly, natural AI texting on WhatsApp on behalf of ${ownerName}.
 Your goal is to chat naturally with the user, answer their questions, and assist them authentically.
@@ -46,12 +45,24 @@ Guidelines:
 - If someone asks personal details or private schedule items you don't know, politely say you'll pass the message to ${ownerName}.
 - Use occasional emojis naturally.`;
 
+        // Inject business knowledge (products, catalog, offers, AI sales brief)
+        // so the bot can answer product/pricing questions accurately.
+        let businessContext = '';
+        try {
+            businessContext = getBusinessContext(userId);
+        } catch (e) {
+            console.warn('   ⚠️ Could not load business context (non-fatal):', e.message);
+        }
+
         const personalizedInstruction = `${systemPrompt || defaultPrompt}
 
 Context:
 - Chatting with: ${contactName || 'Friend/Customer'} (Phone: ${phone || 'Unknown'})
 - Replying on behalf of: ${ownerName}
-${businessName ? `- Business/Organization: ${businessName}` : ''}`;
+${businessName ? `- Business/Organization: ${businessName}` : ''}${businessContext ? `
+
+Business knowledge (use this to answer questions about products, services, prices, and offers accurately — do not invent details that are not listed; if something isn't covered, say you'll check and get back):
+${businessContext}` : ''}`;
 
         // Format conversation history for Gemini (consecutive alternating messages)
         const contents = [];

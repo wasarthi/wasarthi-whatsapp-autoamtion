@@ -1,14 +1,25 @@
-// One-time DB fix script - patches the sql.js database file directly
-const initSqlJs = require('sql.js');
+/**
+ * fix_db.js — resets one account's AI reply settings to sane defaults
+ * (a good system prompt, AI-first mode on, away-mode off, all chatbot
+ * keyword rules disabled so they don't fight with the AI).
+ *
+ * IMPORTANT: this now requires an account email and only touches that one
+ * account. The database is multi-tenant — every account has its own copy
+ * of these settings (`settings` is keyed by (user_id, key), not just
+ * `key`). An earlier version of this script updated rows by key alone,
+ * which on this schema would have silently overwritten EVERY account's AI
+ * settings and disabled EVERY account's chatbot rules in one run. That bug
+ * is fixed by requiring you to name the exact account.
+ *
+ * You can also just do this from the dashboard itself — Settings → AI
+ * Behavior — this script exists for when the UI isn't reachable for some
+ * reason.
+ *
+ * Usage (from the project root):
+ *   node fix_db.js you@example.com
+ */
 const path = require('path');
-const fs = require('fs');
-
-const dbPath = path.join(__dirname, 'data', 'whatsapp.db');
-
-if (!fs.existsSync(dbPath)) {
-    console.error('❌ Database file not found at:', dbPath);
-    process.exit(1);
-}
+const db = require(path.join(__dirname, 'src', 'database'));
 
 const goodPrompt = `You are a friendly, natural AI texting on WhatsApp on behalf of the account owner.
 
@@ -20,43 +31,45 @@ Guidelines:
 - If asked something personal you don't know, say you will let the owner know.
 - Use occasional emojis naturally.`;
 
-async function fix() {
-    const SQL = await initSqlJs();
-    const fileBuffer = fs.readFileSync(dbPath);
-    const db = new SQL.Database(fileBuffer);
-
-    // Show current values
-    const rows = db.exec("SELECT key, value FROM settings WHERE key IN ('ai_system_prompt','ai_enabled','ai_mode','away_mode')");
-    console.log('\n📋 Current settings:');
-    if (rows.length > 0) {
-        rows[0].values.forEach(([k, v]) => console.log(`  ${k} = ${String(v).substring(0, 100)}`));
+(async () => {
+    const email = (process.argv[2] || '').trim().toLowerCase();
+    if (!email) {
+        console.error('Usage: node fix_db.js you@example.com');
+        process.exit(1);
     }
 
-    // Fix all values
-    db.run("UPDATE settings SET value = ? WHERE key = 'ai_system_prompt'", [goodPrompt]);
-    db.run("UPDATE settings SET value = 'true'  WHERE key = 'ai_enabled'");
-    db.run("UPDATE settings SET value = 'ai_first' WHERE key = 'ai_mode'");
-    db.run("UPDATE settings SET value = 'false' WHERE key = 'away_mode'");
-    db.run("UPDATE chatbot_rules SET is_active = 0");
+    await db.initDatabase();
 
-    // Save back to file
-    const data = db.export();
-    fs.writeFileSync(dbPath, Buffer.from(data));
-    db.close();
-
-    // Verify
-    console.log('\n✅ Fixed! Now your settings are:');
-    const SQL2 = await initSqlJs();
-    const db2 = new SQL2.Database(fs.readFileSync(dbPath));
-    const after = db2.exec("SELECT key, value FROM settings WHERE key IN ('ai_system_prompt','ai_enabled','ai_mode','away_mode')");
-    if (after.length > 0) {
-        after[0].values.forEach(([k, v]) => console.log(`  ${k} = ${String(v).substring(0, 100)}`));
+    const user = db.getUserByEmail(email);
+    if (!user) {
+        console.error(`No account found with email "${email}". Check the address and try again.`);
+        process.exit(1);
     }
-    db2.close();
-    console.log('\n✅ Database patched! Now run: npm start');
-}
 
-fix().catch(err => {
-    console.error('❌ Error:', err.message);
+    console.log(`\nCurrent settings for #${user.id} ${user.email}:`);
+    console.log(`  ai_system_prompt = ${(db.getSetting(user.id, 'ai_system_prompt') || '').slice(0, 100)}`);
+    console.log(`  ai_enabled       = ${db.getSetting(user.id, 'ai_enabled')}`);
+    console.log(`  ai_mode          = ${db.getSetting(user.id, 'ai_mode')}`);
+    console.log(`  away_mode        = ${db.getSetting(user.id, 'away_mode')}`);
+
+    db.setSetting(user.id, 'ai_system_prompt', goodPrompt);
+    db.setSetting(user.id, 'ai_enabled', 'true');
+    db.setSetting(user.id, 'ai_mode', 'ai_first');
+    db.setSetting(user.id, 'away_mode', 'false');
+
+    const rules = db.getChatbotRules(user.id);
+    for (const rule of rules) {
+        db.updateChatbotRule(user.id, rule.id, { is_active: 0 });
+    }
+
+    console.log(`\nFixed! ${email} now has:`);
+    console.log(`  ai_system_prompt = ${(db.getSetting(user.id, 'ai_system_prompt') || '').slice(0, 100)}`);
+    console.log(`  ai_enabled       = ${db.getSetting(user.id, 'ai_enabled')}`);
+    console.log(`  ai_mode          = ${db.getSetting(user.id, 'ai_mode')}`);
+    console.log(`  away_mode        = ${db.getSetting(user.id, 'away_mode')}`);
+    console.log(`  chatbot rules disabled: ${rules.length}`);
+    console.log('\nOnly this one account was touched. Now run: npm start');
+})().catch(err => {
+    console.error('Error:', err.message);
     process.exit(1);
 });

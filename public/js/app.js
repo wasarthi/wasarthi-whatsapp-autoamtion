@@ -6,6 +6,40 @@ const API = '';
 
 // ─── State ──────────────────────────────────────────────────
 let currentSection = 'dashboard';
+let CURRENT_USER = null;
+
+// ─── Auth gate ──────────────────────────────────────────────
+// Every page under /app requires a logged-in session. If the cookie is
+// missing/expired the API returns 401 and we bounce to the login page.
+async function checkAuth() {
+    try {
+        const res = await fetch('/api/auth/me');
+        if (!res.ok) {
+            window.location.href = '/login';
+            return false;
+        }
+        const json = await res.json();
+        CURRENT_USER = json.data;
+
+        const nameEl   = document.getElementById('topbarUserName');
+        const avatarEl = document.getElementById('topbarAvatar');
+        const adminNav = document.getElementById('nav-admin');
+        const label = CURRENT_USER.business_name || CURRENT_USER.owner_name || CURRENT_USER.email;
+        if (nameEl)   nameEl.textContent = label;
+        if (avatarEl) avatarEl.textContent = label.slice(0, 2).toUpperCase();
+        if (adminNav) adminNav.style.display = CURRENT_USER.role === 'admin' ? '' : 'none';
+
+        return true;
+    } catch (err) {
+        window.location.href = '/login';
+        return false;
+    }
+}
+
+async function logout() {
+    try { await fetch('/api/auth/logout', { method: 'POST' }); } catch (e) {}
+    window.location.href = '/login';
+}
 
 // ─── API Client ─────────────────────────────────────────────
 async function api(endpoint, options = {}) {
@@ -14,6 +48,11 @@ async function api(endpoint, options = {}) {
             headers: { 'Content-Type': 'application/json', ...options.headers },
             ...options
         });
+        if (res.status === 401) {
+            // Session expired or account signed out elsewhere — send them back to login.
+            window.location.href = '/login';
+            throw new Error('Not authenticated');
+        }
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'API request failed');
         return data.data;
@@ -26,12 +65,12 @@ async function api(endpoint, options = {}) {
 // ─── Toast Notifications ────────────────────────────────────
 function showToast(message, type = 'info') {
     const container = document.getElementById('toastContainer');
-    const icons = { success: '✅', error: '❌', info: 'ℹ️' };
+    const iconNames = { success: 'check-circle', error: 'x-circle', info: 'info' };
 
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
     toast.innerHTML = `
-        <span class="toast-icon" aria-hidden="true">${icons[type]}</span>
+        <span class="toast-icon" aria-hidden="true">${Icon(iconNames[type])}</span>
         <span class="toast-text">${escapeHtml(message)}</span>
         <button class="toast-close" aria-label="Dismiss notification" onclick="this.parentElement.remove()">×</button>
     `;
@@ -50,7 +89,7 @@ function showErrorBanner(containerId, message, retryFn) {
     el.style.display = 'flex';
     el.innerHTML = `
         <div class="error-banner" role="alert">
-            <span aria-hidden="true">⚠️</span>
+            <span aria-hidden="true">${Icon('triangle-alert')}</span>
             <span>${escapeHtml(message)}</span>
             ${retryFn ? `<button class="error-retry" type="button">Retry</button>` : ''}
         </div>
@@ -111,6 +150,8 @@ function loadSectionData(section) {
     switch (section) {
         case 'dashboard': loadDashboard(); break;
         case 'messages':  loadMessages();  break;
+        case 'leads':     loadLeads(); break;
+        case 'crm':       loadCrm(); break;
         case 'chatbot':   loadChatbotRules(); break;
         case 'contacts':  loadContacts(); break;
         case 'scheduled': loadScheduled(); break;
@@ -151,44 +192,55 @@ async function loadDashboard() {
         const indicator = document.getElementById('modeIndicator');
         if (indicator) {
             if (stats.demoMode) {
-                indicator.textContent = '🧪 Demo Mode';
-                indicator.style.color = 'var(--color-warning)';
+                indicator.innerHTML = `${Icon('flask-conical', 'icon-inline')}Demo Mode`;
+                indicator.style.color = '#E3C15C';
             } else {
-                indicator.textContent = '🟢 Live';
-                indicator.style.color = 'var(--color-primary-500)';
+                indicator.innerHTML = `<span class="live-dot"></span>Live`;
+                indicator.style.color = '#4ADE80';
             }
         }
 
-        // Update stat cards with animation
-        animateValue('valSentToday',     stats.sentToday);
-        animateValue('valReceivedToday', stats.receivedToday);
-        animateValue('valContacts',      stats.totalContacts);
-        animateValue('valActiveRules',   stats.activeRules);
+        const setText = (id, text) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = text;
+        };
 
-        // Recent activity
-        hideSkeleton('activitySkeleton');
-        const activityEl = document.getElementById('recentActivity');
-        if (stats.recentMessages.length === 0) {
-            activityEl.innerHTML = `
-                <div class="empty-state">
-                    <span class="empty-state-icon" aria-hidden="true">🚀</span>
-                    <div class="empty-state-title">No messages yet</div>
-                    <p>Send your first message to get started!</p>
-                </div>`;
-        } else {
-            activityEl.innerHTML = stats.recentMessages.map(msg => `
-                <div class="activity-item">
-                    <span class="activity-direction" aria-hidden="true">${msg.direction === 'incoming' ? '📥' : '📤'}</span>
-                    <div class="activity-details">
-                        <div class="activity-phone">${escapeHtml(msg.contact_name || msg.phone)}</div>
-                        <div class="activity-text">${escapeHtml(msg.body)}</div>
-                    </div>
-                    <span class="activity-time">${timeAgo(msg.created_at)}</span>
-                </div>
-            `).join('');
+        // ── Messages ──
+        animateValue('valSentToday',        stats.sentToday);
+        animateValue('valReceivedToday',    stats.receivedToday);
+        animateValue('valTotalMessages',    stats.totalMessages);
+        animateValue('valPendingScheduled', stats.pendingScheduled);
+
+        // ── Leads ──
+        const leads = stats.leads || {};
+        animateValue('valDashLeadsTotal',   leads.total || 0);
+        animateValue('valDashInterested',   leads.interested || 0);
+        animateValue('valDashHighPriority', leads.highPriority || 0);
+        animateValue('valDashAwaiting',     stats.awaitingAnalysis || 0);
+
+        // ── Sales pipeline ──
+        const crm = stats.crm || {};
+        const cur = stats.currency || '₹';
+        setText('valDashPipeline', `${cur}${(parseFloat(crm.pipelineValue) || 0).toLocaleString('en-IN')}`);
+        animateValue('valDashOpenDeals', crm.openDeals || 0);
+        animateValue('valDashWon',       crm.wonDeals || 0);
+        animateValue('valDashFollowups', crm.followupsDue || 0);
+
+        // ── Workspace ──
+        animateValue('valContacts',    stats.totalContacts);
+        animateValue('valActiveRules', stats.activeRules);
+
+        const waEl = document.getElementById('valWaStatus');
+        if (waEl) {
+            waEl.textContent = stats.waConnected ? 'Connected' : 'Offline';
+            waEl.style.color = stats.waConnected ? 'var(--color-success)' : 'var(--color-error)';
+        }
+        const aiEl = document.getElementById('valAiStatus');
+        if (aiEl) {
+            aiEl.textContent = stats.aiConfigured ? 'Active' : 'Setup needed';
+            aiEl.style.color = stats.aiConfigured ? 'var(--color-success)' : 'var(--color-warning)';
         }
     } catch (err) {
-        hideSkeleton('activitySkeleton');
         showErrorBanner('dashboardError', 'Failed to load dashboard data.', loadDashboard);
     }
 }
@@ -232,7 +284,7 @@ async function loadMessages() {
                 <tr>
                     <td colspan="5">
                         <div class="empty-state">
-                            <span class="empty-state-icon" aria-hidden="true">💬</span>
+                            <span class="empty-state-icon" aria-hidden="true">${Icon('message-square')}</span>
                             <div class="empty-state-title">No messages found</div>
                             <p>Try adjusting your search or filter.</p>
                         </div>
@@ -243,7 +295,7 @@ async function loadMessages() {
 
         tbody.innerHTML = messages.map(msg => `
             <tr>
-                <td><span class="badge badge-${msg.direction}">${msg.direction === 'incoming' ? '📥 In' : '📤 Out'}</span></td>
+                <td><span class="badge badge-${msg.direction}">${msg.direction === 'incoming' ? Icon('arrow-down-left') + ' In' : Icon('arrow-up-right') + ' Out'}</span></td>
                 <td>
                     <strong>${escapeHtml(msg.contact_name || msg.phone)}</strong>
                     ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</small>` : ''}
@@ -261,6 +313,750 @@ async function loadMessages() {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  LEAD ANALYSIS
+// ═══════════════════════════════════════════════════════════
+const INTEREST_META = {
+    interested:     { label: () => Icon('check-circle') + ' Interested',     cls: 'lead-badge-interested' },
+    not_interested: { label: () => Icon('x-circle') + ' Not Interested',     cls: 'lead-badge-not-interested' },
+    neutral:        { label: () => Icon('minus-circle') + ' Neutral',        cls: 'lead-badge-neutral' },
+    unclear:        { label: () => Icon('help-circle') + ' Unclear',         cls: 'lead-badge-neutral' }
+};
+
+const PRIORITY_META = {
+    high:   { label: () => Icon('flame') + ' High',           cls: 'lead-priority-high' },
+    medium: { label: () => Icon('zap') + ' Medium',            cls: 'lead-priority-medium' },
+    low:    { label: () => Icon('circle-dashed') + ' Low',     cls: 'lead-priority-low' }
+};
+
+async function loadLeads() {
+    clearErrorBanner('leadsError');
+    try {
+        const interest = document.getElementById('leadInterestFilter')?.value || '';
+        const priority = document.getElementById('leadPriorityFilter')?.value || '';
+
+        let endpoint = '/api/leads';
+        const params = [];
+        if (interest) params.push(`interest=${encodeURIComponent(interest)}`);
+        if (priority) params.push(`priority=${encodeURIComponent(priority)}`);
+        if (params.length) endpoint += `?${params.join('&')}`;
+
+        const { leads, stats, pending } = await api(endpoint);
+
+        animateValue('valLeadsTotal',      stats.total);
+        animateValue('valLeadsInterested', stats.interested);
+        animateValue('valLeadsHigh',       stats.highPriority);
+        animateValue('valLeadsPending',    pending.length);
+
+        const container = document.getElementById('leadsList');
+
+        let html = '';
+
+        // Chats not yet analyzed (or with new messages)
+        if (pending.length > 0 && !interest && !priority) {
+            html += `
+                <div class="card" style="margin-bottom:16px">
+                    <h2 class="card-title">${Icon('hourglass', 'icon-inline')}Awaiting Analysis (${pending.length})</h2>
+                    <div class="pending-leads">
+                        ${pending.map(p => `
+                            <div class="pending-lead-row">
+                                <div>
+                                    <strong>${escapeHtml(p.contact_name || p.phone)}</strong>
+                                    <small style="color:var(--color-text-secondary);margin-left:8px">${escapeHtml(p.phone)} · ${p.message_count} msgs</small>
+                                </div>
+                                <button class="btn btn-sm btn-secondary" onclick="analyzeLead(${jsAttr(p.phone)})" type="button">${Icon('brain', 'icon-inline')}Analyze</button>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>`;
+        }
+
+        if (leads.length === 0) {
+            html += `
+                <div class="empty-state">
+                    <span class="empty-state-icon" aria-hidden="true">${Icon('target')}</span>
+                    <div class="empty-state-title">No lead analyses yet</div>
+                    <p>${(interest || priority) ? 'No leads match these filters.' : 'Click "Analyze All Chats" to let the AI review your conversations.'}</p>
+                </div>`;
+        } else {
+            html += leads.map(renderLeadCard).join('');
+        }
+
+        container.innerHTML = html;
+    } catch (err) {
+        showErrorBanner('leadsError', 'Failed to load lead analyses.', loadLeads);
+        document.getElementById('leadsList').innerHTML = '';
+    }
+}
+
+function renderLeadCard(lead) {
+    const interest = INTEREST_META[lead.interest_status] || INTEREST_META.unclear;
+    const priority = PRIORITY_META[lead.priority] || PRIORITY_META.low;
+
+    let issues = [];
+    try { issues = JSON.parse(lead.issues || '[]'); } catch (e) { issues = []; }
+
+    return `
+        <div class="card lead-card" data-phone="${escapeHtml(lead.phone)}">
+            <div class="lead-card-header">
+                <div class="lead-identity">
+                    <strong>${escapeHtml(lead.contact_name || lead.phone)}</strong>
+                    <small style="color:var(--color-text-secondary)">${escapeHtml(lead.phone)}</small>
+                </div>
+                <div class="lead-badges">
+                    <span class="lead-badge ${interest.cls}">${interest.label()}</span>
+                    <span class="lead-badge ${priority.cls}">${priority.label()}</span>
+                    <span class="lead-badge lead-badge-score" title="Interest score">${lead.interest_score}/100</span>
+                </div>
+            </div>
+
+            <div class="lead-summary">${escapeHtml(lead.summary)}</div>
+
+            ${(lead.issue_category || issues.length) ? `
+                <div class="lead-issues">
+                    ${lead.issue_category ? `<span class="lead-badge lead-badge-category">${Icon('tag')} ${escapeHtml(lead.issue_category)}</span>` : ''}
+                    ${issues.length ? `<ul>${issues.map(i => `<li>${escapeHtml(i)}</li>`).join('')}</ul>` : ''}
+                </div>` : ''}
+
+            ${lead.next_action ? `
+                <div class="lead-next-action">
+                    <strong>${Icon('corner-down-right', 'icon-inline')}Next action:</strong> ${escapeHtml(lead.next_action)}
+                </div>` : ''}
+
+            <div class="lead-card-footer">
+                <span style="color:var(--color-text-secondary);font-size:0.78rem">
+                    ${escapeHtml(lead.priority_reason || '')}
+                    · Sentiment: ${escapeHtml(lead.sentiment)}
+                    · ${lead.message_count} msgs
+                    · Analyzed ${timeAgo(lead.last_analyzed_at)}
+                </span>
+                <button class="btn btn-sm btn-secondary" onclick="analyzeLead(${jsAttr(lead.phone)})" type="button" title="Re-analyze with latest messages">${Icon('refresh-cw', 'icon-inline')}Re-analyze</button>
+            </div>
+        </div>`;
+}
+
+async function analyzeLead(phone) {
+    showToast(`Analyzing conversation with ${phone}…`, 'info');
+    try {
+        await api(`/api/leads/analyze/${encodeURIComponent(phone)}`, { method: 'POST' });
+        showToast('Analysis complete!', 'success');
+        loadLeads();
+    } catch (err) {
+        showToast(err.message || 'Analysis failed', 'error');
+    }
+}
+
+async function analyzeAllLeads() {
+    const btn = document.getElementById('analyzeAllBtn');
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('hourglass')}</span> Analyzing… (this can take a while)`;
+
+    try {
+        const result = await api('/api/leads/analyze-all', { method: 'POST' });
+        const failedNote = result.failed.length ? `, ${result.failed.length} failed` : '';
+        showToast(`Analyzed ${result.analyzed} chat(s), ${result.skipped} already up to date${failedNote}.`,
+                  result.failed.length ? 'error' : 'success');
+        loadLeads();
+    } catch (err) {
+        showToast(err.message || 'Bulk analysis failed', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('brain')}</span> Analyze All Chats`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  CRM
+// ═══════════════════════════════════════════════════════════
+const STAGE_META = {
+    new:         { text: 'New',          icon: 'circle-plus',    color: '#6B7280' },
+    contacted:   { text: 'Contacted',    icon: 'phone',          color: '#3B82F6' },
+    qualified:   { text: 'Qualified',    icon: 'star',           color: '#8B5CF6' },
+    proposal:    { text: 'Proposal',     icon: 'file-text',      color: '#F59E0B' },
+    negotiation: { text: 'Negotiation',  icon: 'handshake',      color: '#F97316' },
+    won:         { text: 'Won',          icon: 'trophy',         color: '#22C55E' },
+    lost:        { text: 'Lost',         icon: 'x-circle',       color: '#EF4444' }
+};
+// `label()` = icon + text (for headers/badges); plain `text` alone for <option> elements
+Object.values(STAGE_META).forEach(s => { s.label = () => Icon(s.icon) + ' ' + s.text; });
+
+let crmCurrency = '₹';
+let crmDealsCache = [];
+
+function fmtMoney(value) {
+    const n = parseFloat(value) || 0;
+    return `${crmCurrency}${n.toLocaleString('en-IN')}`;
+}
+
+// ─── CRM Analytics Charts ───────────────────────────────────
+// Palette validated for colour-vision safety on the cream surface (#FFFDF6).
+const CHART_INK = { text: '#23312A', sub: '#7B8378', grid: '#EFE8D8', surface: '#FFFDF6', tooltipBg: '#223129' };
+const STAGE_RAMP = ['#79BF94', '#50AC76', '#2F8F58', '#1B7144', '#0D5231']; // ordinal: new → negotiation
+const OPEN_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation'];
+const INTEREST_ORDER = [
+    { key: 'interested',     label: 'Interested',     color: '#1B9457' },
+    { key: 'unclear',        label: 'Unclear',        color: '#C99B2E' },
+    { key: 'not_interested', label: 'Not Interested', color: '#C4553D' },
+    { key: 'neutral',        label: 'Neutral',        color: '#5E7FBF' }
+];
+const ACTIVITY_COLORS = { outgoing: '#1B9457', incoming: '#3E7CB1' };
+
+let crmCharts = {};
+
+function destroyCrmCharts() {
+    Object.values(crmCharts).forEach(c => { try { c.destroy(); } catch (e) {} });
+    crmCharts = {};
+}
+
+function chartTooltipStyle() {
+    return {
+        backgroundColor: CHART_INK.tooltipBg,
+        titleColor: '#FBF8EE',
+        bodyColor: '#FBF8EE',
+        padding: 10,
+        cornerRadius: 10,
+        boxPadding: 4,
+        displayColors: true
+    };
+}
+
+function renderHtmlLegend(containerId, items) {
+    const el = document.getElementById(containerId);
+    if (!el) return;
+    const total = items.reduce((s, i) => s + i.value, 0) || 1;
+    el.innerHTML = items.map(i => `
+        <div class="chart-legend-row">
+            <span class="chart-legend-swatch" style="background:${i.color}"></span>
+            <span class="chart-legend-label">${escapeHtml(i.label)}</span>
+            <span class="chart-legend-value">${i.formatted !== undefined ? i.formatted : i.value} · ${Math.round(i.value / total * 100)}%</span>
+        </div>`).join('');
+}
+
+function renderCrmCharts(a) {
+    const grid = document.getElementById('crmChartsGrid');
+    if (!grid) return;
+    if (typeof Chart === 'undefined') { grid.style.display = 'none'; return; } // CDN unavailable — charts skipped
+    grid.style.display = '';
+    destroyCrmCharts();
+
+    Chart.defaults.font.family = "'Inter', -apple-system, sans-serif";
+    Chart.defaults.font.size = 11.5;
+    Chart.defaults.color = CHART_INK.sub;
+
+    const byStage = {};
+    (a.stageBreakdown || []).forEach(r => { byStage[r.stage] = r; });
+    const stageLabels = ['New', 'Contacted', 'Qualified', 'Proposal', 'Negotiation'];
+    const stageCounts = OPEN_STAGES.map(s => byStage[s]?.count || 0);
+    const stageValues = OPEN_STAGES.map(s => byStage[s]?.value || 0);
+    const cur = a.currency || crmCurrency || '₹';
+
+    // ── 1. Donut: open deals by stage (ordinal green ramp) ──
+    const donutEl = document.getElementById('chartStageDeals');
+    if (donutEl) {
+        if (stageCounts.every(c => c === 0)) {
+            donutEl.closest('.chart-flex').innerHTML = '<p class="chart-empty">No open deals yet — analyzed sales chats will appear here.</p>';
+        } else {
+            crmCharts.stageDeals = new Chart(donutEl, {
+                type: 'doughnut',
+                data: {
+                    labels: stageLabels,
+                    datasets: [{
+                        data: stageCounts,
+                        backgroundColor: STAGE_RAMP,
+                        borderColor: CHART_INK.surface,
+                        borderWidth: 2,
+                        hoverOffset: 6
+                    }]
+                },
+                options: {
+                    cutout: '62%',
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: chartTooltipStyle()
+                    }
+                }
+            });
+            renderHtmlLegend('legendStageDeals', stageLabels.map((l, i) => ({
+                label: l, value: stageCounts[i], color: STAGE_RAMP[i]
+            })).filter(i => i.value > 0));
+        }
+    }
+
+    // ── 2. Bars: pipeline value by stage (same ordinal ramp) ──
+    const barEl = document.getElementById('chartStageValue');
+    if (barEl) {
+        crmCharts.stageValue = new Chart(barEl, {
+            type: 'bar',
+            data: {
+                labels: stageLabels,
+                datasets: [{
+                    data: stageValues,
+                    backgroundColor: STAGE_RAMP,
+                    borderRadius: { topLeft: 4, topRight: 4 },
+                    maxBarThickness: 34
+                }]
+            },
+            options: {
+                maintainAspectRatio: false,
+                plugins: {
+                    legend: { display: false },
+                    tooltip: {
+                        ...chartTooltipStyle(),
+                        callbacks: { label: (ctx) => ` ${cur}${(ctx.parsed.y || 0).toLocaleString('en-IN')}` }
+                    }
+                },
+                scales: {
+                    x: { grid: { display: false }, border: { color: CHART_INK.grid } },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: CHART_INK.grid },
+                        border: { display: false },
+                        ticks: { callback: (v) => cur + (v >= 1000 ? (v / 1000) + 'k' : v), maxTicksLimit: 6 }
+                    }
+                }
+            }
+        });
+    }
+
+    // ── 3. Donut: lead interest mix ──
+    const intEl = document.getElementById('chartInterest');
+    if (intEl) {
+        const mixMap = {};
+        (a.interestMix || []).forEach(r => { mixMap[r.interest_status] = r.count; });
+        const items = INTEREST_ORDER.map(i => ({ ...i, value: mixMap[i.key] || 0 }));
+        if (items.every(i => i.value === 0)) {
+            intEl.closest('.chart-flex').innerHTML = '<p class="chart-empty">No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.</p>';
+        } else {
+            crmCharts.interest = new Chart(intEl, {
+                type: 'doughnut',
+                data: {
+                    labels: items.map(i => i.label),
+                    datasets: [{
+                        data: items.map(i => i.value),
+                        backgroundColor: items.map(i => i.color),
+                        borderColor: CHART_INK.surface,
+                        borderWidth: 2,
+                        hoverOffset: 6
+                    }]
+                },
+                options: {
+                    cutout: '62%',
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: chartTooltipStyle() }
+                }
+            });
+            renderHtmlLegend('legendInterest', items.filter(i => i.value > 0));
+        }
+    }
+
+    // ── 4. Line: message activity, last 7 days ──
+    const actEl = document.getElementById('chartActivity');
+    if (actEl) {
+        const days = a.messagesByDay || [];
+        const labels = days.map(d => {
+            const dt = new Date(d.day + 'T00:00:00');
+            return isNaN(dt) ? d.day : dt.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+        });
+        const lineCommon = {
+            borderWidth: 2,
+            pointRadius: 0,
+            pointHoverRadius: 5,
+            pointHoverBorderColor: CHART_INK.surface,
+            pointHoverBorderWidth: 2,
+            tension: 0.35,
+            fill: false
+        };
+        crmCharts.activity = new Chart(actEl, {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [
+                    { label: 'Incoming', data: days.map(d => d.incoming), borderColor: ACTIVITY_COLORS.incoming, pointHoverBackgroundColor: ACTIVITY_COLORS.incoming, ...lineCommon },
+                    { label: 'Outgoing', data: days.map(d => d.outgoing), borderColor: ACTIVITY_COLORS.outgoing, pointHoverBackgroundColor: ACTIVITY_COLORS.outgoing, ...lineCommon }
+                ]
+            },
+            options: {
+                maintainAspectRatio: false,
+                interaction: { mode: 'index', intersect: false },
+                plugins: {
+                    legend: {
+                        position: 'top',
+                        align: 'end',
+                        labels: { usePointStyle: true, pointStyle: 'circle', boxWidth: 7, boxHeight: 7, color: CHART_INK.text }
+                    },
+                    tooltip: chartTooltipStyle()
+                },
+                scales: {
+                    x: { grid: { display: false }, border: { color: CHART_INK.grid } },
+                    y: {
+                        beginAtZero: true,
+                        grid: { color: CHART_INK.grid },
+                        border: { display: false },
+                        ticks: { precision: 0, maxTicksLimit: 6 }
+                    }
+                }
+            }
+        });
+    }
+}
+
+async function loadCrm() {
+    clearErrorBanner('crmError');
+    try {
+        const [{ deals, stats, stages, currency }, analytics] = await Promise.all([
+            api('/api/crm/deals'),
+            api('/api/crm/analytics').catch(() => null)
+        ]);
+        crmCurrency = currency || '₹';
+        crmDealsCache = deals;
+
+        document.getElementById('valCrmPipeline').textContent = fmtMoney(stats.pipelineValue);
+        animateValue('valCrmOpen', stats.openDeals);
+        animateValue('valCrmWon',  stats.wonDeals);
+        animateValue('valCrmFollowups', stats.followupsDue);
+
+        if (analytics) renderCrmCharts(analytics);
+        else document.getElementById('crmChartsGrid')?.style.setProperty('display', 'none');
+
+        const board = document.getElementById('kanbanBoard');
+
+        if (deals.length === 0) {
+            board.innerHTML = `
+                <div class="empty-state" style="grid-column: 1 / -1">
+                    <span class="empty-state-icon" aria-hidden="true">${Icon('trending-up')}</span>
+                    <div class="empty-state-title">No deals yet</div>
+                    <p>Run a lead analysis (Lead Analysis tab) or add a deal manually — sales chats become deals automatically.</p>
+                </div>`;
+            return;
+        }
+
+        board.innerHTML = stages.map(stage => {
+            const meta = STAGE_META[stage];
+            const stageDeals = deals.filter(d => d.stage === stage);
+            const stageValue = stageDeals.reduce((sum, d) => sum + (parseFloat(d.deal_value) || 0), 0);
+            return `
+                <div class="kanban-column" data-stage="${stage}">
+                    <div class="kanban-column-header" style="border-top: 3px solid ${meta.color}">
+                        <span class="kanban-column-title">${meta.label()}</span>
+                        <span class="kanban-column-meta">${stageDeals.length}${stageValue ? ` · ${fmtMoney(stageValue)}` : ''}</span>
+                    </div>
+                    <div class="kanban-cards">
+                        ${stageDeals.map(renderDealCard).join('') || '<div class="kanban-empty">—</div>'}
+                    </div>
+                </div>`;
+        }).join('');
+    } catch (err) {
+        showErrorBanner('crmError', 'Failed to load CRM pipeline.', loadCrm);
+        document.getElementById('kanbanBoard').innerHTML = '';
+    }
+}
+
+function renderDealCard(deal) {
+    const followupDue = deal.next_followup_at && new Date(deal.next_followup_at + 'Z') <= new Date()
+        && !['won', 'lost'].includes(deal.stage);
+    const priorityBadge = deal.priority
+        ? `<span class="lead-badge ${(PRIORITY_META[deal.priority] || PRIORITY_META.low).cls}">${(PRIORITY_META[deal.priority] || PRIORITY_META.low).label()}</span>`
+        : '';
+
+    return `
+        <div class="deal-card" onclick="openDealModal(${jsAttr(deal.phone)})" role="button" tabindex="0"
+             onkeydown="if(event.key==='Enter')openDealModal(${jsAttr(deal.phone)})">
+            <div class="deal-card-top">
+                <strong>${escapeHtml(deal.contact_name || deal.phone)}</strong>
+                ${deal.deal_value ? `<span class="deal-value">${fmtMoney(deal.deal_value)}</span>` : ''}
+            </div>
+            ${deal.product_interest ? `<div class="deal-product">${Icon('package', 'icon-inline')}${escapeHtml(deal.product_interest)}</div>` : ''}
+            <div class="deal-card-badges">
+                ${priorityBadge}
+                ${deal.interest_score ? `<span class="lead-badge lead-badge-score">${deal.interest_score}/100</span>` : ''}
+                ${followupDue ? `<span class="lead-badge lead-priority-high">${Icon('clock')} Follow up!</span>` : ''}
+            </div>
+        </div>`;
+}
+
+// ─── Deal detail modal ──────────────────────────────────────
+let currentDealPhone = null;
+
+async function openDealModal(phone) {
+    currentDealPhone = phone;
+    const backdrop = document.getElementById('dealModalBackdrop');
+    const body = document.getElementById('dealModalBody');
+    const title = document.getElementById('dealModalTitle');
+
+    backdrop.style.display = 'flex';
+    body.innerHTML = '<div class="empty-state">Loading deal…</div>';
+
+    try {
+        const { deal, analysis, activities } = await api(`/api/crm/deals/phone/${encodeURIComponent(phone)}`);
+        title.textContent = deal.contact_name || deal.phone;
+
+        const followupVal = deal.next_followup_at ? deal.next_followup_at.replace(' ', 'T').slice(0, 16) : '';
+
+        body.innerHTML = `
+            <div class="deal-detail-grid">
+                <div class="form-group">
+                    <label>Stage</label>
+                    <select id="modalDealStage">
+                        ${Object.keys(STAGE_META).map(s =>
+                            `<option value="${s}" ${deal.stage === s ? 'selected' : ''}>${STAGE_META[s].text}</option>`).join('')}
+                    </select>
+                    ${deal.ai_suggested_stage && deal.ai_suggested_stage !== deal.stage
+                        ? `<p class="form-text">${Icon('brain', 'icon-inline')}AI suggests: <strong>${escapeHtml(deal.ai_suggested_stage)}</strong></p>` : ''}
+                </div>
+                <div class="form-group">
+                    <label>Deal Value (${escapeHtml(crmCurrency)})</label>
+                    <input type="number" id="modalDealValue" value="${parseFloat(deal.deal_value) || 0}" min="0" step="any">
+                    ${deal.ai_estimated_value && !parseFloat(deal.deal_value)
+                        ? `<p class="form-text">${Icon('brain', 'icon-inline')}AI estimate: ${fmtMoney(deal.ai_estimated_value)}</p>` : ''}
+                </div>
+                <div class="form-group">
+                    <label>Product / Service</label>
+                    <input type="text" id="modalDealProduct" value="${escapeHtml(deal.product_interest || '')}">
+                </div>
+                <div class="form-group">
+                    <label>Next Follow-up</label>
+                    <input type="datetime-local" id="modalDealFollowup" value="${followupVal}">
+                </div>
+            </div>
+
+            <div class="form-group">
+                <label>Deal Notes</label>
+                <textarea id="modalDealNotes" rows="2">${escapeHtml(deal.notes || '')}</textarea>
+            </div>
+
+            <div class="modal-actions">
+                <button class="btn btn-primary btn-sm" onclick="saveDealFromModal(${deal.id})" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteDealFromModal(${deal.id})" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
+                <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}</small>
+            </div>
+
+            ${analysis ? `
+                <div class="modal-section">
+                    <h3>${Icon('target', 'icon-inline')}AI Conversation Insight</h3>
+                    <div class="lead-summary">${escapeHtml(analysis.summary || '')}</div>
+                    ${analysis.next_action ? `<div class="lead-next-action"><strong>${Icon('corner-down-right', 'icon-inline')}Next action:</strong> ${escapeHtml(analysis.next_action)}</div>` : ''}
+                </div>` : `
+                <div class="modal-section">
+                    <h3>${Icon('target', 'icon-inline')}AI Conversation Insight</h3>
+                    <p style="color:var(--color-text-secondary);font-size:0.85rem">Not analyzed yet — run it from the Lead Analysis tab.</p>
+                </div>`}
+
+            <div class="modal-section">
+                <h3>${Icon('sticky-note', 'icon-inline')}Activity & Notes</h3>
+                <div class="note-form">
+                    <input type="text" id="modalNewNote" placeholder="Add a note… (e.g. called them, sent quote)">
+                    <button class="btn btn-secondary btn-sm" onclick="addNoteFromModal()" type="button">Add</button>
+                </div>
+                <div class="activity-timeline" id="modalActivities">
+                    ${activities.length ? activities.map(renderActivity).join('') : '<p style="color:var(--color-text-secondary);font-size:0.85rem">No activity yet.</p>'}
+                </div>
+            </div>`;
+    } catch (err) {
+        body.innerHTML = `<div class="empty-state"><div class="empty-state-title">Could not load deal</div><p>${escapeHtml(err.message)}</p></div>`;
+    }
+}
+
+function renderActivity(act) {
+    const icons = { note: 'sticky-note', ai: 'brain', stage: 'shuffle', system: 'settings' };
+    return `
+        <div class="activity-entry">
+            <span class="activity-entry-icon">${Icon(icons[act.type] || 'sticky-note')}</span>
+            <div class="activity-entry-body">
+                <div>${escapeHtml(act.content)}</div>
+                <small>${formatDate(act.created_at)}</small>
+            </div>
+        </div>`;
+}
+
+function closeDealModal() {
+    document.getElementById('dealModalBackdrop').style.display = 'none';
+    currentDealPhone = null;
+}
+
+async function saveDealFromModal(dealId) {
+    try {
+        await api(`/api/crm/deals/${dealId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+                stage:            document.getElementById('modalDealStage').value,
+                deal_value:       document.getElementById('modalDealValue').value,
+                product_interest: document.getElementById('modalDealProduct').value,
+                next_followup_at: document.getElementById('modalDealFollowup').value
+                                    ? document.getElementById('modalDealFollowup').value.replace('T', ' ') : null,
+                notes:            document.getElementById('modalDealNotes').value
+            })
+        });
+        showToast('Deal updated', 'success');
+        closeDealModal();
+        loadCrm();
+    } catch (err) {
+        showToast(err.message || 'Failed to update deal', 'error');
+    }
+}
+
+async function deleteDealFromModal(dealId) {
+    if (!confirm('Delete this deal? The conversation and lead analysis are kept.')) return;
+    try {
+        await api(`/api/crm/deals/${dealId}`, { method: 'DELETE' });
+        showToast('Deal deleted', 'success');
+        closeDealModal();
+        loadCrm();
+    } catch (err) {
+        showToast('Failed to delete deal', 'error');
+    }
+}
+
+async function addNoteFromModal() {
+    const input = document.getElementById('modalNewNote');
+    const content = input.value.trim();
+    if (!content || !currentDealPhone) return;
+    try {
+        await api(`/api/crm/deals/phone/${encodeURIComponent(currentDealPhone)}/notes`, {
+            method: 'POST',
+            body: JSON.stringify({ content })
+        });
+        input.value = '';
+        // Refresh just the modal content
+        openDealModal(currentDealPhone);
+    } catch (err) {
+        showToast('Failed to add note', 'error');
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  BUSINESS SETUP
+// ═══════════════════════════════════════════════════════════
+async function loadBusiness() {
+    try {
+        const biz = await api('/api/business');
+
+        const set = (id, val) => {
+            const el = document.getElementById(id);
+            if (el) el.value = val || '';
+        };
+        set('bizWebsite',     biz.website);
+        set('bizIndustry',    biz.industry);
+        set('bizDescription', biz.description);
+        set('bizTarget',      biz.targetCustomers);
+        set('bizCurrency',    biz.currency);
+        set('bizOffers',      biz.offers);
+
+        renderProductList(biz.products || []);
+        if (biz.aiProfile) renderBusinessProfile(biz.aiProfile);
+    } catch (err) {
+        showToast('Failed to load business info', 'error');
+    }
+}
+
+function renderProductList(products) {
+    const container = document.getElementById('productList');
+    if (!container) return;
+
+    if (products.length === 0) {
+        container.innerHTML = '<p style="color:var(--color-text-secondary);font-size:0.85rem">No products yet — add your catalog above so the AI can quote it to customers.</p>';
+        return;
+    }
+
+    container.innerHTML = products.map(p => `
+        <div class="product-row ${p.is_active ? '' : 'disabled'}">
+            <div class="product-row-info">
+                <strong>${escapeHtml(p.name)}</strong>
+                ${p.price ? `<span class="lead-badge lead-badge-score">${escapeHtml(p.price)}</span>` : ''}
+                ${p.category ? `<span class="lead-badge lead-badge-category">${escapeHtml(p.category)}</span>` : ''}
+                ${p.description ? `<div class="product-row-desc">${escapeHtml(p.description)}</div>` : ''}
+                ${p.url ? `<div class="product-row-desc"><a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.url)}</a></div>` : ''}
+            </div>
+            <div class="rule-actions">
+                <button class="btn btn-sm btn-secondary" onclick="toggleProduct(${p.id}, ${p.is_active ? 0 : 1})" title="${p.is_active ? 'Hide from AI' : 'Show to AI'}" type="button">${Icon(p.is_active ? 'pause' : 'play')}</button>
+                <button class="btn btn-sm btn-danger" onclick="deleteProductRow(${p.id})" title="Delete" type="button">${Icon('trash-2')}</button>
+            </div>
+        </div>
+    `).join('');
+}
+
+async function toggleProduct(id, newState) {
+    try {
+        await api(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify({ is_active: newState }) });
+        loadBusiness();
+    } catch (err) {
+        showToast('Failed to update product', 'error');
+    }
+}
+
+async function deleteProductRow(id) {
+    if (!confirm('Remove this product from the catalog?')) return;
+    try {
+        await api(`/api/products/${id}`, { method: 'DELETE' });
+        showToast('Product removed', 'success');
+        loadBusiness();
+    } catch (err) {
+        showToast('Failed to remove product', 'error');
+    }
+}
+
+function renderBusinessProfile(profile) {
+    const container = document.getElementById('businessProfileResult');
+    if (!container) return;
+
+    const list = (arr) => (arr || []).map(i => `<li>${escapeHtml(typeof i === 'string' ? i : JSON.stringify(i))}</li>`).join('');
+
+    container.innerHTML = `
+        <div class="biz-profile">
+            <div class="biz-profile-block">
+                <h4>${Icon('map-pin', 'icon-inline')}Positioning</h4>
+                <p>${escapeHtml(profile.profile_summary || '')}</p>
+            </div>
+            ${profile.selling_points?.length ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('sparkles', 'icon-inline')}Selling Points</h4>
+                    <ul>${list(profile.selling_points)}</ul>
+                </div>` : ''}
+            ${profile.ideal_customer ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('target', 'icon-inline')}Ideal Customer</h4>
+                    <p>${escapeHtml(profile.ideal_customer)}</p>
+                </div>` : ''}
+            ${profile.sales_pitch ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('message-circle', 'icon-inline')}Ready-to-send Pitch</h4>
+                    <p class="biz-pitch">${escapeHtml(profile.sales_pitch)}</p>
+                </div>` : ''}
+            ${profile.objection_handling?.length ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('shield', 'icon-inline')}Objection Handling</h4>
+                    <ul>${profile.objection_handling.map(o => `<li><strong>${escapeHtml(o.objection || '')}</strong> — ${escapeHtml(o.response || '')}</li>`).join('')}</ul>
+                </div>` : ''}
+            ${profile.faq?.length ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('help-circle', 'icon-inline')}Suggested FAQ</h4>
+                    <ul>${profile.faq.map(f => `<li><strong>${escapeHtml(f.q || '')}</strong> — ${escapeHtml(f.a || '')}</li>`).join('')}</ul>
+                </div>` : ''}
+            ${profile.improvement_tips?.length ? `
+                <div class="biz-profile-block">
+                    <h4>${Icon('trending-up', 'icon-inline')}Tips to Convert More</h4>
+                    <ul>${list(profile.improvement_tips)}</ul>
+                </div>` : ''}
+            ${profile.analyzed_at ? `<small style="color:var(--color-text-secondary)">Analyzed ${timeAgo(profile.analyzed_at)}</small>` : ''}
+        </div>`;
+}
+
+async function analyzeBusiness() {
+    const btn = document.getElementById('analyzeBusinessBtn');
+    btn.disabled = true;
+    btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('hourglass')}</span> Analyzing your business…`;
+    try {
+        const profile = await api('/api/business/analyze', { method: 'POST' });
+        renderBusinessProfile(profile);
+        showToast('Business analysis complete! The AI will now use this in replies and lead scoring.', 'success');
+    } catch (err) {
+        showToast(err.message || 'Business analysis failed', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('brain')}</span> Analyze My Business`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  CHATBOT RULES
 // ═══════════════════════════════════════════════════════════
 async function loadChatbotRules() {
@@ -274,7 +1070,7 @@ async function loadChatbotRules() {
         if (rules.length === 0) {
             container.innerHTML = `
                 <div class="empty-state">
-                    <span class="empty-state-icon" aria-hidden="true">🤖</span>
+                    <span class="empty-state-icon" aria-hidden="true">${Icon('bot')}</span>
                     <div class="empty-state-title">No chatbot rules yet</div>
                     <p>Add your first rule above to get started!</p>
                 </div>`;
@@ -303,7 +1099,7 @@ async function loadChatbotRules() {
                         title="${rule.is_active ? 'Disable rule' : 'Enable rule'}"
                         aria-label="${rule.is_active ? 'Disable' : 'Enable'} rule: ${escapeHtml(rule.trigger_keyword)}"
                         type="button">
-                        ${rule.is_active ? '⏸️' : '▶️'}
+                        ${Icon(rule.is_active ? 'pause' : 'play')}
                     </button>
                     <button
                         class="btn btn-sm btn-danger"
@@ -311,7 +1107,7 @@ async function loadChatbotRules() {
                         title="Delete rule"
                         aria-label="Delete rule: ${escapeHtml(rule.trigger_keyword)}"
                         type="button">
-                        🗑️
+                        ${Icon('trash-2')}
                     </button>
                 </div>
             </div>
@@ -369,15 +1165,15 @@ async function testChatbot() {
         if (result.matched) {
             resultEl.className = 'test-result matched';
             resultEl.innerHTML = `
-                <strong>✅ Rule #${result.ruleId} matched!</strong><br>
+                <strong>${Icon('check-circle', 'icon-inline')}Rule #${result.ruleId} matched!</strong><br>
                 <strong>Keyword:</strong> "${escapeHtml(result.keyword)}" (${escapeHtml(result.matchType)})<br>
                 <strong>Response:</strong> ${escapeHtml(result.response)}
             `;
         } else {
             resultEl.className = 'test-result no-match';
             resultEl.innerHTML = result.willSendDefault
-                ? `<strong>⚠️ No rule matched.</strong> Default reply will be sent:<br>"${escapeHtml(result.defaultReply)}"`
-                : '<strong>⚠️ No rule matched</strong> and no default reply configured.';
+                ? `<strong>${Icon('triangle-alert', 'icon-inline')}No rule matched.</strong> Default reply will be sent:<br>"${escapeHtml(result.defaultReply)}"`
+                : `<strong>${Icon('triangle-alert', 'icon-inline')}No rule matched</strong> and no default reply configured.`;
         }
     } catch (err) {
         showToast('Test failed', 'error');
@@ -405,7 +1201,7 @@ async function loadContacts() {
                 <tr>
                     <td colspan="5">
                         <div class="empty-state">
-                            <span class="empty-state-icon" aria-hidden="true">👥</span>
+                            <span class="empty-state-icon" aria-hidden="true">${Icon('users')}</span>
                             <div class="empty-state-title">No contacts found</div>
                             <p>${search ? 'Try a different search term.' : 'Add your first contact above!'}</p>
                         </div>
@@ -426,7 +1222,7 @@ async function loadContacts() {
                         onclick="deleteContact(${c.id})"
                         title="Delete contact"
                         aria-label="Delete contact ${escapeHtml(c.name || c.phone)}"
-                        type="button">🗑️</button>
+                        type="button">${Icon('trash-2')}</button>
                 </td>
             </tr>
         `).join('');
@@ -527,6 +1323,9 @@ async function loadSettings() {
         set('settAiMode',         settings.ai_mode || 'ai_first');
         set('settAiSystemPrompt', settings.ai_system_prompt);
         set('settGeminiApiKey',   settings.gemini_api_key);
+
+        // Business Setup tab data
+        loadBusiness();
     } catch (err) {
         showToast('Failed to load settings', 'error');
     }
@@ -555,21 +1354,21 @@ function initSSE() {
                 if (qrLoading) qrLoading.style.display = 'none';
                 if (statusDot)  statusDot.className  = 'status-dot error';
                 if (statusText) statusText.textContent = 'Scan QR Code';
-                if (connInfo)   connInfo.innerHTML   = '<p style="color:var(--color-warning)">⚠️ Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>';
+                if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-warning)">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
 
             } else if (data.type === 'ready') {
                 hide(qrLoading); hide(qrImage); show(qrSuccess);
                 if (statusDot)  statusDot.className  = 'status-dot connected';
                 if (statusText) statusText.textContent = 'Connected';
                 if (connInfo)   connInfo.innerHTML   = `
-                    <p class="connected-text">✅ Connected to WhatsApp</p>
+                    <p class="connected-text">${Icon('check-circle', 'icon-inline')}Connected to WhatsApp</p>
                     <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
 
             } else if (data.type === 'disconnected' || data.type === 'error') {
                 show(qrLoading); hide(qrImage); hide(qrSuccess);
                 if (statusDot)  statusDot.className  = 'status-dot error';
                 if (statusText) statusText.textContent = 'Disconnected';
-                if (connInfo)   connInfo.innerHTML   = '<p style="color:var(--color-error)">❌ Not connected</p>';
+                if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
 
             } else if (data.type === 'loading') {
                 show(qrLoading); hide(qrImage); hide(qrSuccess);
@@ -592,9 +1391,17 @@ function initSSE() {
 // ═══════════════════════════════════════════════════════════
 function escapeHtml(str) {
     if (str == null) return '';
-    const div = document.createElement('div');
-    div.textContent = String(str);
-    return div.innerHTML;
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+/** Safely embed an arbitrary string as an argument inside an inline onclick="fn(...)" handler. */
+function jsAttr(str) {
+    return escapeHtml(JSON.stringify(str == null ? '' : String(str)));
 }
 
 function formatDate(dateStr) {
@@ -622,7 +1429,21 @@ function timeAgo(dateStr) {
 // ═══════════════════════════════════════════════════════════
 //  EVENT LISTENERS
 // ═══════════════════════════════════════════════════════════
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+
+    // ── Icons ────────────────────────────────────────────────
+    // Hydrates every static [data-icon] element written in index.html into
+    // an inline SVG (see js/icons.js). Dynamic content rendered by this file
+    // calls Icon() directly inside its template strings instead.
+    if (typeof hydrateIcons === 'function') hydrateIcons();
+
+    // ── Auth gate ────────────────────────────────────────────
+    // Redirects to /login if there's no valid session — nothing else on
+    // this page should run for a logged-out visitor.
+    const authed = await checkAuth();
+    if (!authed) return;
+
+    document.getElementById('logoutBtn')?.addEventListener('click', logout);
 
     // ── Settings tabs ──────────────────────────────────────
     initSettingsTabs();
@@ -658,6 +1479,15 @@ document.addEventListener('DOMContentLoaded', () => {
         showToast('Refreshed', 'info');
     });
 
+    // ── Dashboard stat tiles → navigate ─────────────────────
+    document.querySelectorAll('.stat-clickable[data-goto]').forEach(tile => {
+        tile.addEventListener('click', () => navigateTo(tile.dataset.goto));
+        tile.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigateTo(tile.dataset.goto); }
+        });
+        tile.setAttribute('tabindex', '0');
+    });
+
     // ── Quick send form ─────────────────────────────────────
     document.getElementById('quickSendForm').addEventListener('submit', async (e) => {
         e.preventDefault();
@@ -677,12 +1507,12 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast(`Message sent to ${phone}`, 'success');
             document.getElementById('qsPhone').value    = '';
             document.getElementById('qsMessage').value  = '';
-            loadDashboard();
+            loadMessages();
         } catch (err) {
             showToast(err.message || 'Failed to send message', 'error');
         } finally {
             btn.disabled = false;
-            btn.innerHTML = '<span class="btn-icon" aria-hidden="true">📨</span> Send Message';
+            btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message`;
         }
     });
 
@@ -767,14 +1597,162 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     document.getElementById('messageFilter').addEventListener('change', loadMessages);
 
+    // ── Global (topbar) search — jumps to Contacts and filters there,
+    // since that's the most common "find someone" lookup. Also mirrors
+    // the term into Messages' own search box so it's ready if the user
+    // clicks over there next.
+    const globalSearchEl = document.getElementById('globalSearch');
+    globalSearchEl?.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const term = globalSearchEl.value.trim();
+        if (!term) return;
+        const contactSearchEl = document.getElementById('contactSearch');
+        const messageSearchEl = document.getElementById('messageSearch');
+        if (contactSearchEl) contactSearchEl.value = term;
+        if (messageSearchEl) messageSearchEl.value = term;
+        navigateTo('contacts');
+        loadContacts();
+    });
+
+    // ── Lead analysis controls ──────────────────────────────
+    document.getElementById('analyzeAllBtn')?.addEventListener('click', analyzeAllLeads);
+    document.getElementById('leadInterestFilter')?.addEventListener('change', loadLeads);
+    document.getElementById('leadPriorityFilter')?.addEventListener('change', loadLeads);
+
+    // ── CRM controls ────────────────────────────────────────
+    document.getElementById('addDealBtn')?.addEventListener('click', () => {
+        const card = document.getElementById('addDealCard');
+        card.style.display = card.style.display === 'none' ? '' : 'none';
+    });
+
+    document.getElementById('addDealForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const phone = document.getElementById('dealPhone').value.trim();
+        if (!phone) return;
+        try {
+            await api('/api/crm/deals', {
+                method: 'POST',
+                body: JSON.stringify({
+                    phone,
+                    contact_name:     document.getElementById('dealName').value.trim(),
+                    deal_value:       document.getElementById('dealValue').value,
+                    stage:            document.getElementById('dealStage').value,
+                    product_interest: document.getElementById('dealProduct').value.trim()
+                })
+            });
+            showToast('Deal added!', 'success');
+            document.getElementById('addDealForm').reset();
+            document.getElementById('addDealCard').style.display = 'none';
+            loadCrm();
+        } catch (err) {
+            showToast(err.message || 'Failed to add deal', 'error');
+        }
+    });
+
+    // Deal modal close handlers
+    document.getElementById('dealModalClose')?.addEventListener('click', closeDealModal);
+    document.getElementById('dealModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeDealModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeDealModal();
+    });
+    document.getElementById('dealModal')?.addEventListener('click', (e) => e.stopPropagation());
+
+    // ── Business Setup controls ─────────────────────────────
+    document.getElementById('businessForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const btn = document.getElementById('saveBusinessBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        try {
+            await api('/api/settings', {
+                method: 'PUT',
+                body: JSON.stringify({
+                    business_website:          document.getElementById('bizWebsite').value.trim(),
+                    business_industry:         document.getElementById('bizIndustry').value.trim(),
+                    business_description:      document.getElementById('bizDescription').value.trim(),
+                    business_target_customers: document.getElementById('bizTarget').value.trim(),
+                    business_currency:         document.getElementById('bizCurrency').value.trim() || '₹',
+                    business_offers:           document.getElementById('bizOffers').value.trim()
+                })
+            });
+            showToast('Business profile saved! The AI will use it right away.', 'success');
+        } catch (err) {
+            showToast('Failed to save business profile', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save Business Profile';
+        }
+    });
+
+    document.getElementById('addProductForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const name = document.getElementById('prodName').value.trim();
+        if (!name) return;
+        try {
+            await api('/api/products', {
+                method: 'POST',
+                body: JSON.stringify({
+                    name,
+                    price:       document.getElementById('prodPrice').value.trim(),
+                    category:    document.getElementById('prodCategory').value.trim(),
+                    description: document.getElementById('prodDesc').value.trim(),
+                    url:         document.getElementById('prodUrl').value.trim()
+                })
+            });
+            showToast('Added to catalog!', 'success');
+            document.getElementById('addProductForm').reset();
+            loadBusiness();
+        } catch (err) {
+            showToast('Failed to add product', 'error');
+        }
+    });
+
+    document.getElementById('analyzeBusinessBtn')?.addEventListener('click', analyzeBusiness);
+
     // ── Schedule message form ───────────────────────────────
+    // The <input type="datetime-local"> gives back a value like "2026-08-08T14:30" —
+    // your LOCAL wall-clock time, with no timezone info and no seconds. The
+    // server compares scheduled_at against SQLite's datetime('now'), which is
+    // UTC in "YYYY-MM-DD HH:MM:SS" format. Sending the raw local value through
+    // unconverted both (a) uses the wrong separator so the comparison never
+    // matches — messages would sit "pending" indefinitely instead of sending
+    // on time — and (b) ignores the local/UTC offset, so even once that's
+    // fixed the message fires at the wrong wall-clock time for anyone not in
+    // UTC. Converting through a real Date object fixes both at once.
+    function toSqliteUtc(datetimeLocalValue) {
+        const d = new Date(datetimeLocalValue);
+        if (isNaN(d.getTime())) return null;
+        return d.toISOString().slice(0, 19).replace('T', ' ');
+    }
+
+    const schedDateInput = document.getElementById('schedDate');
+    if (schedDateInput) {
+        // Guide the native picker away from the past (not all browsers enforce
+        // `min` on datetime-local, so this is a UX nudge, not the real guard).
+        const pad = n => String(n).padStart(2, '0');
+        const now = new Date();
+        schedDateInput.min = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
+    }
+
     document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
         e.preventDefault();
-        const phone        = document.getElementById('schedPhone').value.trim();
-        const body         = document.getElementById('schedMessage').value.trim();
-        const scheduled_at = document.getElementById('schedDate').value;
+        const phone          = document.getElementById('schedPhone').value.trim();
+        const body           = document.getElementById('schedMessage').value.trim();
+        const localValue     = document.getElementById('schedDate').value;
 
-        if (!phone || !body || !scheduled_at) return;
+        if (!phone || !body || !localValue) return;
+
+        const scheduled_at = toSqliteUtc(localValue);
+        if (!scheduled_at) {
+            showToast('That date/time doesn\'t look valid.', 'error');
+            return;
+        }
+        if (new Date(localValue).getTime() < Date.now()) {
+            showToast('Pick a time in the future — that one has already passed.', 'error');
+            return;
+        }
 
         const btn = e.target.querySelector('[type="submit"]');
         btn.disabled = true;
@@ -789,7 +1767,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('scheduleForm').reset();
             loadScheduled();
         } catch (err) {
-            showToast('Failed to schedule message', 'error');
+            showToast(err.message || 'Failed to schedule message', 'error');
         } finally {
             btn.disabled = false;
             btn.textContent = 'Schedule Message';
@@ -885,13 +1863,26 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    document.getElementById('clearMessagesBtn')?.addEventListener('click', () => {
-        // No backend endpoint yet; warn user
-        showToast('Clear messages is not yet implemented on the server.', 'info');
+    document.getElementById('clearMessagesBtn')?.addEventListener('click', async () => {
+        if (!confirm('Permanently delete ALL stored messages? This cannot be undone.')) return;
+        try {
+            await api('/api/messages', { method: 'DELETE' });
+            showToast('Message history cleared', 'success');
+            if (currentSection === 'messages') loadMessages();
+            if (currentSection === 'dashboard') loadDashboard();
+        } catch (err) {
+            showToast(err.message || 'Failed to clear message history', 'error');
+        }
     });
 
-    document.getElementById('disconnectBtn')?.addEventListener('click', () => {
-        showToast('Disconnect: please restart the server to log out of WhatsApp.', 'info');
+    document.getElementById('disconnectBtn')?.addEventListener('click', async () => {
+        if (!confirm('Disconnect this WhatsApp number? You can reconnect any time by scanning a new QR code.')) return;
+        try {
+            await api('/api/whatsapp/disconnect', { method: 'POST' });
+            showToast('WhatsApp disconnected.', 'success');
+        } catch (err) {
+            showToast(err.message || 'Failed to disconnect', 'error');
+        }
     });
 
     // ── Initial load ────────────────────────────────────────

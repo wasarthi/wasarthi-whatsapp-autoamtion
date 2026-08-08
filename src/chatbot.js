@@ -1,13 +1,26 @@
-const { getChatbotRules, incrementRuleHitCount, getSetting, getConversation, logMessage } = require('./database');
+const { getChatbotRules, incrementRuleHitCount, getSetting, getConversation, logMessage, getUserById, getMonthlyOutgoingCount } = require('./database');
 const { generateReply } = require('./ai');
+const { scheduleAutoAnalysis } = require('./lead-analyzer');
 
 // ─── Anti-Ban Rate Limiting ─────────────────────────────────
 const userRateLimits = new Map();
 
-function isRateLimited(phone) {
+// Without this, every distinct (userId, phone) pair that ever messages in
+// stays in memory forever — a slow leak on a long-running server with many
+// contacts. Sweep out anything whose 60s window is long over.
+const _rateLimitCleanup = setInterval(() => {
     const now = Date.now();
-    const limitData = userRateLimits.get(phone) || { count: 0, firstMsgTime: now };
-    
+    for (const [key, data] of userRateLimits) {
+        if (now - data.firstMsgTime > 5 * 60 * 1000) userRateLimits.delete(key);
+    }
+}, 10 * 60 * 1000);
+_rateLimitCleanup.unref?.();
+
+function isRateLimited(userId, phone) {
+    const key = `${userId}:${phone}`;
+    const now = Date.now();
+    const limitData = userRateLimits.get(key) || { count: 0, firstMsgTime: now };
+
     // Reset window every 60 seconds
     if (now - limitData.firstMsgTime > 60000) {
         limitData.count = 1;
@@ -15,11 +28,18 @@ function isRateLimited(phone) {
     } else {
         limitData.count++;
     }
-    
-    userRateLimits.set(phone, limitData);
-    
+
+    userRateLimits.set(key, limitData);
+
     // Allow max 10 messages per minute
     return limitData.count > 10;
+}
+
+/** True if this account has hit its plan's monthly outgoing-message cap (0 = unlimited). */
+function isOverPlanLimit(userId) {
+    const account = getUserById(userId);
+    if (!account || !account.message_limit) return false;
+    return getMonthlyOutgoingCount(userId) >= account.message_limit;
 }
 
 // ─── Human Simulation (Delay & Typing) ──────────────────────
@@ -62,12 +82,12 @@ async function safeReply(client, phone, responseText, msg) {
 }
 
 // ─── Process an incoming message through chatbot rules ──────
-async function processMessage(phone, messageText, contactName = '', client = null, msg = null) {
-    console.log(`\n🤖 processMessage() called for ${contactName || phone} (${phone})`);
+async function processMessage(userId, phone, messageText, contactName = '', client = null, msg = null) {
+    console.log(`\n🤖 processMessage() called for user ${userId}, ${contactName || phone} (${phone})`);
 
     // Always log incoming message to database
     try {
-        logMessage({
+        logMessage(userId, {
             phone,
             contactName,
             direction: 'incoming',
@@ -77,35 +97,47 @@ async function processMessage(phone, messageText, contactName = '', client = nul
         console.error('   ⚠️ Failed to log incoming message to DB:', dbErr.message);
     }
 
-    if (isRateLimited(phone)) {
+    // Queue a debounced AI lead-analysis of this conversation (runs after the chat goes quiet)
+    try {
+        scheduleAutoAnalysis(userId, phone);
+    } catch (analysisErr) {
+        console.error('   ⚠️ Could not schedule lead analysis:', analysisErr.message);
+    }
+
+    if (isRateLimited(userId, phone)) {
         console.log(`⚠️ Rate limit exceeded for ${phone}, ignoring message to prevent ban.`);
         return { replied: false, reason: 'rate_limit' };
     }
 
-    const chatbotEnabled = getSetting('chatbot_enabled');
+    if (isOverPlanLimit(userId)) {
+        console.log(`⚠️ Account ${userId} has hit its monthly message limit — skipping auto-reply.`);
+        return { replied: false, reason: 'plan_limit_reached' };
+    }
+
+    const chatbotEnabled = getSetting(userId, 'chatbot_enabled');
     if (chatbotEnabled !== 'true') {
         console.log('   ❌ Chatbot is disabled globally, skipping auto-reply');
         return { replied: false, reason: 'chatbot_disabled' };
     }
 
-    const aiEnabled = getSetting('ai_enabled');
-    const aiMode = getSetting('ai_mode') || 'ai_first';
+    const aiEnabled = getSetting(userId, 'ai_enabled');
+    const aiMode = getSetting(userId, 'ai_mode') || 'ai_first';
 
     // ── 1. AI-FIRST PERSONA MODE (Talk on behalf of owner) ──────
     // When AI is enabled, Gemini is the intelligent brain for all conversations
     if (aiEnabled === 'true' && aiMode === 'ai_first') {
         console.log('🧠 AI Persona Mode: Generating intelligent reply on your behalf via Gemini...');
-        const aiSystemPrompt = getSetting('ai_system_prompt');
-        
+        const aiSystemPrompt = getSetting(userId, 'ai_system_prompt');
+
         // Fetch recent conversation history for memory
-        const allMessages = getConversation(phone) || [];
+        const allMessages = getConversation(userId, phone) || [];
         const recentHistory = allMessages.slice(-10);
 
         try {
-            const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
-            
+            const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
+
             await safeReply(client, phone, aiResponse, msg);
-            logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
+            logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             return { replied: true, rule: 'ai_persona', response: aiResponse };
         } catch (aiErr) {
             console.warn('⚠️ AI Persona Mode failed (falling back to rules/default reply):', aiErr.message?.split('\\n')[0]);
@@ -113,19 +145,19 @@ async function processMessage(phone, messageText, contactName = '', client = nul
     }
 
     // ── 2. STATIC AWAY MODE (Only if AI is disabled) ───────────
-    const awayMode = getSetting('away_mode');
+    const awayMode = getSetting(userId, 'away_mode');
     if (awayMode === 'true') {
-        const awayMessage = getSetting('away_message');
+        const awayMessage = getSetting(userId, 'away_message');
         if (awayMessage) {
             await safeReply(client, phone, awayMessage, msg);
-            logMessage({ phone, contactName, direction: 'outgoing', body: awayMessage });
+            logMessage(userId, { phone, contactName, direction: 'outgoing', body: awayMessage });
             return { replied: true, rule: 'away_mode', response: awayMessage };
         }
     }
 
     // ── 2. KEYWORD RULES (If AI is off or mode is 'rules_first') ──
     const text = messageText.trim().toLowerCase();
-    const rules = getChatbotRules(true);
+    const rules = getChatbotRules(userId, true);
 
     for (const rule of rules) {
         const keyword = rule.trigger_keyword.toLowerCase();
@@ -160,8 +192,8 @@ async function processMessage(phone, messageText, contactName = '', client = nul
             response = response.replace(/\{phone\}/gi, phone);
 
             await safeReply(client, phone, response, msg);
-            logMessage({ phone, contactName, direction: 'outgoing', body: response });
-            incrementRuleHitCount(rule.id);
+            logMessage(userId, { phone, contactName, direction: 'outgoing', body: response });
+            incrementRuleHitCount(userId, rule.id);
 
             return {
                 replied: true,
@@ -176,15 +208,15 @@ async function processMessage(phone, messageText, contactName = '', client = nul
     // ── 3. AI Fallback (If in rules_first mode and no rule matched) ──
     if (aiEnabled === 'true') {
         console.log('🤖 No rule matched, querying Gemini AI fallback...');
-        const aiSystemPrompt = getSetting('ai_system_prompt');
-        const allMessages = getConversation(phone) || [];
+        const aiSystemPrompt = getSetting(userId, 'ai_system_prompt');
+        const allMessages = getConversation(userId, phone) || [];
         const recentHistory = allMessages.slice(-10);
 
         try {
-            const aiResponse = await generateReply(aiSystemPrompt, recentHistory, contactName, phone);
-            
+            const aiResponse = await generateReply(userId, aiSystemPrompt, recentHistory, contactName, phone);
+
             await safeReply(client, phone, aiResponse, msg);
-            logMessage({ phone, contactName, direction: 'outgoing', body: aiResponse });
+            logMessage(userId, { phone, contactName, direction: 'outgoing', body: aiResponse });
             return { replied: true, rule: 'ai_fallback', response: aiResponse };
         } catch (aiErr) {
             console.warn('⚠️ AI Fallback failed (falling back to default reply):', aiErr.message?.split('\\n')[0]);
@@ -192,11 +224,11 @@ async function processMessage(phone, messageText, contactName = '', client = nul
     }
 
     // ── 4. Static Default Reply ──
-    const defaultReply = getSetting('default_reply');
+    const defaultReply = getSetting(userId, 'default_reply');
     if (defaultReply) {
         console.log('🤖 No rule matched, sending default static reply');
         await safeReply(client, phone, defaultReply, msg);
-        logMessage({ phone, contactName, direction: 'outgoing', body: defaultReply });
+        logMessage(userId, { phone, contactName, direction: 'outgoing', body: defaultReply });
         return { replied: true, rule: 'default', response: defaultReply };
     }
 
@@ -205,9 +237,9 @@ async function processMessage(phone, messageText, contactName = '', client = nul
 }
 
 // ─── Test a message against rules without sending ───────────
-function testMessage(messageText) {
-    const aiEnabled = getSetting('ai_enabled');
-    const aiMode = getSetting('ai_mode') || 'ai_first';
+function testMessage(userId, messageText) {
+    const aiEnabled = getSetting(userId, 'ai_enabled');
+    const aiMode = getSetting(userId, 'ai_mode') || 'ai_first';
 
     if (aiEnabled === 'true' && aiMode === 'ai_first') {
         return {
@@ -215,12 +247,12 @@ function testMessage(messageText) {
             ruleId: 'ai_persona',
             keyword: 'AI Persona Mode',
             matchType: 'dynamic_ai',
-            response: "🧠 Gemini AI will dynamically generate a natural, conversational response acting as you."
+            response: "Gemini AI will dynamically generate a natural, conversational response acting as you."
         };
     }
 
     const text = messageText.trim().toLowerCase();
-    const rules = getChatbotRules(true);
+    const rules = getChatbotRules(userId, true);
 
     for (const rule of rules) {
         const keyword = rule.trigger_keyword.toLowerCase();
@@ -261,11 +293,11 @@ function testMessage(messageText) {
             matched: false,
             willSendDefault: false,
             willSendAI: true,
-            defaultReply: "🤖 Gemini AI will generate a dynamic response based on your System Prompt."
+            defaultReply: "Gemini AI will generate a dynamic response based on your System Prompt."
         };
     }
 
-    const defaultReply = getSetting('default_reply');
+    const defaultReply = getSetting(userId, 'default_reply');
     return {
         matched: false,
         willSendDefault: !!defaultReply,

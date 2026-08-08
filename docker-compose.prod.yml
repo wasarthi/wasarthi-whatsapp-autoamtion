@@ -1,0 +1,31 @@
+# Production overlay — adds Caddy in front for automatic HTTPS on a real
+# domain, and stops publishing the app's port directly to the internet
+# (only Caddy is reachable from outside; it talks to `app` over the
+# private compose network).
+#
+# Use together with the base file:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Before running: point your domain's DNS A record at this server's IP,
+# put that same domain in Caddyfile, and set TRUST_PROXY=true in .env
+# (Caddy is now the reverse proxy that .env's TRUST_PROXY comment refers to).
+services:
+  app:
+    ports: []   # override the base file's "3000:3000" — only Caddy is public now
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+volumes:
+  caddy-data:
+  caddy-config:
