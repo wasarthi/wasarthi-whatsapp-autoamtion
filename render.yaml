@@ -1,0 +1,54 @@
+# Render Blueprint — one-click free deploy.
+#
+# This is for seeing the app live on a real URL, not for real production use.
+# Render's Free plan has two hard limits worth knowing before you look at it:
+#
+#   1. No persistent disk on Free. The database and every connected
+#      WhatsApp account's login reset on every restart/redeploy/spin-down.
+#      Treat every visit as potentially a fresh install.
+#   2. The service spins down after 15 minutes with no traffic, and takes
+#      about a minute to wake back up on the next visit (that first load
+#      will look "stuck" — it isn't, just wait).
+#
+# So: fine for clicking around the login/signup/dashboard/admin panel and
+# showing someone the real UI. Don't scan a real WhatsApp account in here —
+# it'll disconnect the moment the service spins down, and at 512MB RAM /
+# 0.1 CPU (Free plan's limits) even one active Chromium session is pushing
+# what this tier can hold — connecting more than one at a time will likely
+# get it OOM-killed. For a real deploy where WhatsApp connections and data
+# actually persist, this same file works on Render's paid Standard plan —
+# just change `plan: free` to `plan: standard` and uncomment the `disk:`
+# block below.
+#
+# How to use this file: push it to your repo (root, alongside Dockerfile),
+# then in the Render dashboard: New + -> Blueprint -> pick this repo/branch.
+# Render reads this file and prompts you for the two secret values marked
+# sync: false below. Everything else is automatic.
+
+services:
+  - type: web
+    name: wa-automation
+    runtime: docker
+    plan: free
+    branch: updated-WA
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEMO_MODE
+        value: "false"
+      - key: TRUST_PROXY
+        value: "true"
+      - key: MAX_CONCURRENT_WHATSAPP_SESSIONS
+        value: "2"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      # - key: PERSIST_ROOT
+      #   value: /app/persist
+    # disk:
+    #   name: wa-data
+    #   mountPath: /app/persist
+    #   sizeGB: 1

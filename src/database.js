@@ -2,8 +2,15 @@ const initSqlJs = require('sql.js');
 const path = require('path');
 const fs = require('fs');
 
-// Ensure data directory exists
-const dataDir = path.join(__dirname, '..', 'data');
+// Ensure data directory exists.
+// PERSIST_ROOT lets a deploy host that only gives you ONE persistent disk at
+// ONE mount path (Render is the case this exists for) put every stateful
+// folder — this one, plus .wwebjs_auth/.wwebjs_cache in whatsapp-client.js —
+// under that single path. Unset (the default, e.g. Docker Compose on a VPS,
+// which already mounts three separate named volumes), this resolves to
+// exactly what it always has: <project root>/data.
+const persistRoot = process.env.PERSIST_ROOT || path.join(__dirname, '..');
+const dataDir = path.join(persistRoot, 'data');
 if (!fs.existsSync(dataDir)) {
     fs.mkdirSync(dataDir, { recursive: true });
 }

@@ -6,7 +6,21 @@
 # needs it for the identical reason (it's still just Linux underneath).
 FROM node:20-bookworm-slim
 
+# `chromium` here (not just the shared libs a Chrome binary needs) is
+# deliberate: package.json's puppeteer (a dependency of whatsapp-web.js) is
+# on v24, and since puppeteer v20 its default `npm install` behavior is to
+# download its own ~300MB "Chrome for Testing" build from Google's CDN
+# during the postinstall step below. That download has no retry/resume, and
+# on a build host with restricted or flaky egress to that CDN — some CI
+# runners, some PaaS build sandboxes, some corporate/VPS networks — it just
+# hangs or fails, which looks like "the deploy is broken" but is really "the
+# build never finished." Installing a real Chromium from Debian's own apt
+# mirror (already being hit for the libs below, so no new dependency on
+# reachability) and pointing puppeteer at it with the two ENV lines further
+# down skips that download entirely — smaller image, faster build, one less
+# thing that can fail on a host you don't control the network policy of.
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    chromium \
     ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
     libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 \
     libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 \
@@ -15,11 +29,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxtst6 lsb-release wget xdg-utils \
     && rm -rf /var/lib/apt/lists/*
 
+# Tell puppeteer to skip its own Chrome download and use the apt-installed
+# Chromium above instead. PUPPETEER_EXECUTABLE_PATH is read automatically by
+# puppeteer's launcher (whatsapp-client.js doesn't need to pass
+# executablePath itself — this env var alone is enough), and
+# PUPPETEER_SKIP_DOWNLOAD has to be set before `npm install` runs below,
+# since that's the postinstall step it's suppressing.
+ENV PUPPETEER_SKIP_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
 WORKDIR /app
 
-# Dependencies first, in their own layer — this only re-runs (and re-downloads
-# Chromium via puppeteer's postinstall) when package.json actually changes,
-# not on every code edit.
+# Dependencies first, in their own layer — this only re-runs when
+# package.json actually changes, not on every code edit. No Chromium
+# download happens here now (see ENV lines above), just npm packages.
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev && npm cache clean --force
 

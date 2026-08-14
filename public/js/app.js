@@ -120,11 +120,17 @@ function hideSkeleton(id) {
 
 // ─── Navigation ─────────────────────────────────────────────
 function navigateTo(section) {
+    // Guard against being called with nothing. Without this, `undefined`
+    // matches every nav item that has no data-section (the Admin link) and
+    // matches no section at all — which highlights Admin and blanks the
+    // whole page instead of navigating anywhere.
+    if (!section) return;
+
     currentSection = section;
 
     // Update nav items
     document.querySelectorAll('.nav-item').forEach(item => {
-        const active = item.dataset.section === section;
+        const active = !!item.dataset.section && item.dataset.section === section;
         item.classList.toggle('active', active);
         item.setAttribute('aria-current', active ? 'page' : 'false');
     });
@@ -1451,6 +1457,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Navigation ─────────────────────────────────────────
     document.querySelectorAll('.nav-item').forEach(item => {
         item.addEventListener('click', (e) => {
+            // Not every sidebar link is a section of this single-page app.
+            // The Admin panel is its own page (href="/admin") and carries no
+            // data-section — swallowing its click here is what made it
+            // highlight the item, blank the content area, and never leave
+            // /app. No data-section means "let the browser follow the href".
+            if (!item.dataset.section) return;
             e.preventDefault();
             navigateTo(item.dataset.section);
         });
