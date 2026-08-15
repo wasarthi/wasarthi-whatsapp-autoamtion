@@ -1,24 +1,45 @@
 {
   "name": "whatsapp-automation",
   "version": "1.0.0",
-  "description": "WhatsApp Business Cloud API Automation with Admin Dashboard",
+  "description": "WhatsApp Business Automation — multi-tenant, production-grade",
   "main": "server.js",
   "scripts": {
     "start": "node launcher.js",
     "dev": "node launcher.js",
-    "server": "node server.js"
+    "server": "node server.js",
+    "test": "jest --detectOpenHandles",
+    "test:unit": "jest tests/validation.test.js tests/auth.security.test.js --detectOpenHandles",
+    "test:integration": "jest tests/tenant-isolation.test.js --detectOpenHandles",
+    "test:security": "jest tests/auth.security.test.js --detectOpenHandles",
+    "test:watch": "jest --watch",
+    "lint": "node -c src/**/*.js src/**/**/*.js server.js",
+    "db:init": "node -e \"require('./src/database').initDatabase().then(()=>console.log('Database initialized'))\"",
+    "db:migrate": "node -e \"require('./src/database').initDatabase().then(()=>{const db=require('./src/database');console.log('Schema version:',db.getSchemaVersion());console.log('Migrations:',db.MIGRATIONS.map(m=>m.name).join(', '));})\"",
+    "admin:create": "node scripts/dev/make-admin.js",
+    "backup": "bash scripts/backup-db.sh",
+    "health": "curl -sf http://localhost:3000/health || exit 1",
+    "ready": "curl -sf http://localhost:3000/ready || exit 1"
   },
   "dependencies": {
-    "@google/genai": "latest",
+    "@google/genai": "^2.16.0",
     "axios": "^1.7.0",
-    "sql.js": "^1.11.0",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
-    "morgan": "^1.10.0",
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.3",
+    "sql.js": "^1.11.0",
     "whatsapp-web.js": "^1.23.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^30.0.0",
+    "@types/supertest": "^7.2.1",
+    "jest": "^30.4.2",
+    "supertest": "^7.2.2",
+    "ts-jest": "^29.4.12"
+  },
+  "engines": {
+    "node": ">=20.0.0"
   }
 }

@@ -1,159 +1,211 @@
+/**
+ * server.js — process lifecycle: boot, listen, shut down.
+ *
+ * The application itself is built in src/app.js so tests can exercise the
+ * real middleware stack. What lives here is everything that only makes sense
+ * for a running process.
+ *
+ * On the crash policy specifically. The previous version kept a
+ * `setInterval` alive "so Node never exits when Chrome crashes", and handled
+ * uncaughtException by exiting. Those two intentions are contradictory, and
+ * the first one is wrong: after an uncaught exception the process is in an
+ * unknown state — a half-finished database write, a lock never released, a
+ * request never answered. Continuing to serve from that state is how silent
+ * corruption happens. So: fail fast, flush what can be flushed, and let the
+ * supervisor (launcher.js, Docker's restart policy, or systemd) start a clean
+ * process. That is a deliberate choice in favour of correctness over an
+ * uptime number.
+ */
 require('dotenv').config();
-const express = require('express');
-const cors    = require('cors');
-const morgan  = require('morgan');
-const path    = require('path');
-const fs      = require('fs');
 
-// ─── CRITICAL: Keep Node.js process alive forever ─────────────
-// Prevents Node from exiting when Puppeteer/Chrome crashes
-const _keepAlive = setInterval(() => {}, 1 << 30);
+const { createApp } = require('./src/config/app');
+const { initDatabase, forcePersist, getPersistHealth, listUsers } = require('./src/services/database');
+const { initScheduler, stopScheduler, isSchedulerBusy } = require('./src/services/scheduler');
+const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
+const { cancelAllOutreachJobs } = require('./src/services/outreach');
+const { clearPendingAutoAnalyses } = require('./src/services/lead-analyzer');
+const fs   = require('fs');
+const path = require('path');
 
-// ─── Global crash guards ──────────────────────────────────────
-process.on('uncaughtException', (err) => {
-    console.error('❌ UNCAUGHT EXCEPTION (process kept alive):', err.message);
-    console.error(err.stack);
-    // Do NOT call process.exit() — keep the server running
-});
+const PORT = parseInt(process.env.PORT, 10) || 3000;
+const SHUTDOWN_GRACE_MS = parseInt(process.env.SHUTDOWN_GRACE_MS, 10) || 15000;
 
-process.on('unhandledRejection', (reason) => {
-    const msg = reason instanceof Error ? reason.message : String(reason);
-    console.error('❌ UNHANDLED REJECTION (process kept alive):', msg);
-    // Do NOT call process.exit()
-});
+let httpServer = null;
+let shuttingDown = false;
 
-process.on('SIGINT', () => {
-    console.log('\n🛑 Received Ctrl+C. Shutting down gracefully...');
-    clearInterval(_keepAlive);
-    process.exit(0);
-});
+// ─── Startup configuration checks ─────────────────────────────
+/**
+ * Refuses to start a production process that is misconfigured in a way that
+ * would be silently insecure.
+ *
+ * The alternative — log a warning and carry on — means the warning scrolls
+ * past in a deploy log and the service runs for months with, say, an
+ * ephemeral session secret that logs every user out on each restart, or
+ * cookies without Secure. A refused boot is noticed immediately.
+ */
+function validateEnvironment() {
+    const problems = [];
+    const warnings = [];
+    const isProd = process.env.NODE_ENV === 'production';
 
-process.on('SIGTERM', () => {
-    console.log('\n🛑 Received SIGTERM. Shutting down gracefully...');
-    clearInterval(_keepAlive);
-    process.exit(0);
-});
+    if (isProd) {
+        if (!process.env.SESSION_SECRET && !fs.existsSync(path.join(process.env.PERSIST_ROOT || __dirname, 'data', '.session_secret'))) {
+            warnings.push('SESSION_SECRET is not set; one will be generated and persisted to data/.session_secret. Set it explicitly if you run more than one instance, or every instance will sign cookies differently.');
+        }
+        if (process.env.ALLOW_INSECURE_COOKIES === 'true') {
+            warnings.push('ALLOW_INSECURE_COOKIES=true — session cookies will be sent without the Secure flag. Only acceptable for local debugging.');
+        }
+        if (process.env.FORCE_HTTPS !== 'true') {
+            warnings.push('FORCE_HTTPS is not enabled. If a reverse proxy terminates TLS, set FORCE_HTTPS=true so plain-HTTP requests are redirected and HSTS is sent.');
+        }
+        if (process.env.TRUST_PROXY === 'true' || process.env.TRUST_PROXY === '1') {
+            // Correct behind Caddy/nginx; dangerous when directly exposed,
+            // because X-Forwarded-For becomes client-controlled and every
+            // rate limiter can be bypassed by rotating the header.
+            warnings.push('TRUST_PROXY is enabled — make sure this process is actually behind a proxy you control, or clients can spoof their IP and bypass rate limits.');
+        }
+        if (process.env.DISABLE_RATE_LIMITS === 'true') {
+            problems.push('DISABLE_RATE_LIMITS=true must never be set in production — it turns off login brute-force protection.');
+        }
+        const maxSessions = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10);
+        if (Number.isFinite(maxSessions) && maxSessions > 50) {
+            warnings.push(`MAX_CONCURRENT_WHATSAPP_SESSIONS=${maxSessions} — each session is a Chrome process using roughly 150-250MB. Verify the host actually has that memory.`);
+        }
+    }
 
-// ─── App setup ────────────────────────────────────────────────
-const { initDatabase, listUsers }           = require('./src/database');
-const { initScheduler }                     = require('./src/scheduler');
-const apiRoutes                             = require('./src/routes/api');
-const authRoutes                            = require('./src/routes/auth');
-const adminRoutes                           = require('./src/routes/admin');
-const { requireAuth, requireAdmin }         = require('./src/middleware/auth');
-const { initWhatsAppClient, addSSEClient }  = require('./src/whatsapp-client');
+    if (!Number.isFinite(PORT) || PORT <= 0 || PORT > 65535) {
+        problems.push(`PORT is not a valid port number (got "${process.env.PORT}").`);
+    }
 
-const app  = express();
-const PORT = process.env.PORT || 3000;
-
-app.disable('x-powered-by');
-
-// ─── Reverse proxy awareness ────────────────────────────────────
-// Off by default: with no proxy in front, req.ip is already the real
-// client, and blindly trusting X-Forwarded-For would let anyone spoof
-// their IP and dodge the login/signup rate limiters. Only turn this on
-// (TRUST_PROXY=1 in .env) when something you control — Caddy, nginx,
-// Cloudflare — actually sits in front of this process; otherwise every
-// visitor behind that proxy collapses into one IP and the rate limiters
-// stop meaning anything (see routes/auth.js's clientIp() calls).
-if (process.env.TRUST_PROXY === '1' || process.env.TRUST_PROXY === 'true') {
-    app.set('trust proxy', 1);
+    for (const w of warnings) console.warn(`⚠️  Config: ${w}`);
+    if (problems.length) {
+        console.error('❌ Refusing to start due to configuration problems:');
+        for (const p of problems) console.error(`   • ${p}`);
+        process.exit(1);
+    }
 }
 
-// ─── Middleware ───────────────────────────────────────────────
-// This app serves its own frontend from the same origin as the API, so
-// cross-origin *credentialed* requests are never needed for normal use.
-// Reflecting any Origin (the old "origin: true") while credentials: true
-// would let ANY website make authenticated fetch() calls using a logged-in
-// user's session cookie — a serious cross-origin session-hijack risk. Only
-// origins explicitly listed here (comma-separated ALLOWED_ORIGINS env var)
-// are granted credentialed cross-origin access; same-origin browser requests
-// are unaffected either way, since browsers don't consult CORS headers for
-// same-origin calls.
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || '').split(',').map(s => s.trim()).filter(Boolean);
-app.use(cors({
-    origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-        return callback(null, false);
-    },
-    credentials: true
-}));
-app.use(morgan('dev'));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+// ─── Crash guards ─────────────────────────────────────────────
+function fatal(label, err) {
+    console.error(`❌ ${label}:`, err && err.message ? err.message : err);
+    if (err && err.stack) console.error(err.stack);
+    // Try to flush the in-memory database. It may fail (the process state is
+    // by definition suspect), which is why it's wrapped and why the exit
+    // happens regardless.
+    try { forcePersist(); } catch (e) { console.error('   Could not flush database on crash:', e.message); }
+    process.exit(1);
+}
 
-// ─── Baseline security headers (no extra dependency needed) ───
-app.use((req, res, next) => {
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('X-Frame-Options', 'DENY');
-    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-    next();
-});
+process.on('uncaughtException', (err) => fatal('UNCAUGHT EXCEPTION', err));
+process.on('unhandledRejection', (reason) => fatal('UNHANDLED REJECTION', reason instanceof Error ? reason : new Error(String(reason))));
 
-// ─── Static assets (CSS/JS/images) — index.html is served explicitly below ──
-app.use(express.static(path.join(__dirname, 'public'), { index: false }));
+// ─── Graceful shutdown ────────────────────────────────────────
+/**
+ * Stops accepting new work, lets in-flight work finish, then exits.
+ *
+ * Order matters:
+ *   1. stop the HTTP listener      — no new requests
+ *   2. stop the scheduler          — no new sends started
+ *   3. cancel background jobs      — outreach loops and pending AI timers
+ *   4. wait for in-flight sends    — bounded by SHUTDOWN_GRACE_MS
+ *   5. tear down Chrome processes  — otherwise they outlive the container
+ *   6. flush the database          — last, so it captures everything above
+ *
+ * Killing Chrome before waiting would abort a send that WhatsApp had already
+ * accepted, leaving a message delivered but recorded as failed.
+ */
+async function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n🛑 ${signal} received — shutting down gracefully...`);
 
-// ─── Auth routes (public) ──────────────────────────────────────
-app.use('/api/auth', authRoutes);
+    const deadline = Date.now() + SHUTDOWN_GRACE_MS;
 
-// ─── Admin routes (admin-only) ─────────────────────────────────
-app.use('/api/admin', requireAdmin, adminRoutes);
+    if (httpServer) {
+        await new Promise(resolve => httpServer.close(resolve)).catch(() => {});
+        console.log('   ✔ HTTP listener closed');
+    }
 
-// ─── Per-account SSE stream for QR code / connection status ────
-app.get('/api/qr-stream', requireAuth, (req, res) => addSSEClient(req.user.id, req, res));
+    stopScheduler();
+    const cancelled = cancelAllOutreachJobs();
+    if (cancelled) console.log(`   ✔ Requested cancellation of ${cancelled} outreach job(s)`);
+    clearPendingAutoAnalyses();
 
-// ─── Everything else under /api requires a logged-in account ──
-app.use('/api', requireAuth, apiRoutes);
+    while (isSchedulerBusy() && Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 200));
+    }
+    if (isSchedulerBusy()) console.warn('   ⚠ Scheduler still busy at the shutdown deadline — proceeding anyway');
+    else console.log('   ✔ Scheduler idle');
 
-// ─── Unmatched API routes get a JSON 404, not the HTML redirect below ──
-app.use('/api', (req, res) => res.status(404).json({ success: false, error: 'Not found' }));
+    try {
+        const n = await destroyAllClients();
+        console.log(`   ✔ Closed ${n} WhatsApp session(s)`);
+    } catch (e) {
+        console.warn('   ⚠ Error closing WhatsApp sessions:', e.message);
+    }
 
-// ─── Health check ─────────────────────────────────────────────
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', uptime: Math.floor(process.uptime()), pid: process.pid });
-});
+    try {
+        forcePersist();
+        console.log('   ✔ Database flushed to disk');
+    } catch (e) {
+        // Worth shouting about: it means writes from this run are lost.
+        console.error('   ❌ Could not flush the database on shutdown:', e.message);
+    }
 
-// ─── Pages ──────────────────────────────────────────────────────
-// Public marketing/landing page
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'public', 'landing.html')));
-app.get(['/login', '/login.html'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'login.html')));
-app.get(['/signup', '/signup.html'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'signup.html')));
-// The main app dashboard (auth is enforced client-side by app.js via /api/auth/me)
-app.get(['/app', '/app.html', '/index.html'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
-// Admin dashboard (auth + role enforced client-side by admin.js)
-app.get(['/admin', '/admin.html'], (req, res) => res.sendFile(path.join(__dirname, 'public', 'admin.html')));
-// Anything else falls back to the landing page (app.use with no path matches
-// every remaining method/URL — avoids the '*' wildcard syntax that differs
-// between Express 4 and Express 5's path-to-regexp versions)
-app.use((req, res) => res.redirect('/'));
+    console.log('👋 Shutdown complete');
+    process.exit(0);
+}
 
-// ─── Express error handler ────────────────────────────────────
-app.use((err, req, res, next) => {
-    console.error('❌ Express error:', err.message);
-    if (res.headersSent) return next(err);
-    res.status(500).json({ success: false, error: err.message });
-});
+process.on('SIGINT', () => { shutdown('SIGINT').catch(() => process.exit(1)); });
+process.on('SIGTERM', () => { shutdown('SIGTERM').catch(() => process.exit(1)); });
 
-// ─── Reconnect WhatsApp for accounts that were connected before a restart ──
+// ─── Reconnect WhatsApp for accounts connected before a restart ──
+/**
+ * Resumes saved sessions, oldest-first, spread out over time.
+ *
+ * Starting them all at once is what made restarts painful: 25 Chrome
+ * processes launching simultaneously spikes CPU and memory hard enough that
+ * the HTTP server becomes unresponsive right when users are reloading the
+ * page to see if the service is back. Staggering trades a slower full
+ * recovery for a site that stays usable throughout.
+ */
+const RESUME_STAGGER_MS = parseInt(process.env.RESUME_STAGGER_MS, 10) || 4000;
+
 function resumeExistingSessions() {
     try {
-        const authRoot = path.join(__dirname, '.wwebjs_auth');
+        const authRoot = path.join(process.env.PERSIST_ROOT || __dirname, '.wwebjs_auth');
         if (!fs.existsSync(authRoot)) return;
+
         const activeUserIds = new Set(listUsers().filter(u => u.status === 'active').map(u => u.id));
-        const dirs = fs.readdirSync(authRoot);
-        for (const dir of dirs) {
+        const resumable = [];
+
+        for (const dir of fs.readdirSync(authRoot)) {
             const match = dir.match(/^user_(\d+)$/);
             if (!match) continue;
             const userId = parseInt(match[1], 10);
+            // A suspended or deleted account must not be reconnected — its
+            // session folder may still exist on disk.
             if (!activeUserIds.has(userId)) continue;
-            // Only resume if there's an actual saved session folder (not just an empty dir)
             const sessionPath = path.join(authRoot, dir);
-            const hasSession = fs.existsSync(sessionPath) && fs.readdirSync(sessionPath).length > 0;
-            if (hasSession) {
-                console.log(`🔁 Resuming saved WhatsApp session for user ${userId}...`);
-                initWhatsAppClient(userId);
-            }
+            try {
+                if (fs.existsSync(sessionPath) && fs.readdirSync(sessionPath).length > 0) resumable.push(userId);
+            } catch (e) { /* unreadable dir — skip */ }
         }
+
+        if (resumable.length === 0) return;
+        console.log(`🔁 Resuming ${resumable.length} saved WhatsApp session(s), ${RESUME_STAGGER_MS / 1000}s apart...`);
+
+        resumable.forEach((userId, i) => {
+            const t = setTimeout(() => {
+                if (shuttingDown) return;
+                try {
+                    initWhatsAppClient(userId);
+                } catch (e) {
+                    console.warn(`⚠️ Could not resume session for user ${userId}:`, e.message);
+                }
+            }, i * RESUME_STAGGER_MS);
+            t.unref?.();
+        });
     } catch (e) {
         console.warn('⚠️ Could not resume existing WhatsApp sessions (non-fatal):', e.message);
     }
@@ -161,14 +213,20 @@ function resumeExistingSessions() {
 
 // ─── Start ────────────────────────────────────────────────────
 async function start() {
+    validateEnvironment();
+
     try {
         await initDatabase();
         console.log('✅ Database initialized');
     } catch (dbErr) {
-        // Database failure is fatal — let launcher restart us
+        // Fatal on purpose. A corrupt database that we start "fresh" from
+        // looks healthy and empty, and the first successful write destroys
+        // the recoverable file. See openDatabaseFile in src/database.js.
         console.error('❌ Database init failed:', dbErr.message);
         process.exit(1);
     }
+
+    const app = createApp();
 
     try {
         initScheduler();
@@ -178,31 +236,46 @@ async function start() {
     }
 
     await new Promise((resolve, reject) => {
-        const server = app.listen(PORT, resolve);
-        server.on('error', reject);
+        httpServer = app.listen(PORT, resolve);
+        httpServer.on('error', reject);
     });
+
+    // Slow-client protections. Without headersTimeout/requestTimeout, a
+    // client that opens a connection and dribbles bytes holds a socket
+    // indefinitely — a few thousand of those exhaust the process's file
+    // descriptors with almost no attacker bandwidth (Slowloris).
+    httpServer.headersTimeout = 20000;
+    httpServer.requestTimeout = 60000;
+    httpServer.keepAliveTimeout = 20000;
 
     console.log('');
     console.log('╔══════════════════════════════════════════════╗');
     console.log('║   WhatsApp Automation Server Running! 🚀     ║');
     console.log('╠══════════════════════════════════════════════╣');
-    console.log(`║   Landing:  http://localhost:${PORT}             ║`);
-    console.log(`║   Sign up:  http://localhost:${PORT}/signup       ║`);
-    console.log(`║   Log in:   http://localhost:${PORT}/login        ║`);
-    console.log(`║   API:      http://localhost:${PORT}/api          ║`);
+    console.log(`║   Landing:  http://localhost:${PORT}`);
+    console.log(`║   Log in:   http://localhost:${PORT}/login`);
+    console.log(`║   Health:   http://localhost:${PORT}/health`);
+    console.log(`║   Ready:    http://localhost:${PORT}/ready`);
     console.log('╚══════════════════════════════════════════════╝');
     console.log('');
 
-    // Reconnect any accounts whose WhatsApp was connected before this restart,
-    // AFTER the HTTP server is listening so the site is always reachable.
-    try {
-        resumeExistingSessions();
-    } catch (waErr) {
-        console.error('⚠️ Resuming WhatsApp sessions threw synchronously (will auto-retry per account):', waErr.message);
+    if (!getPersistHealth().ok) {
+        console.error('❌ The database could not be written on startup — the service will refuse writes until this is fixed.');
     }
+
+    // After the HTTP server is listening, so the site is reachable while
+    // sessions come back.
+    resumeExistingSessions();
 }
 
-start().catch(err => {
-    console.error('❌ Fatal server start error:', err.message);
-    process.exit(1);   // Let launcher restart with back-off
-});
+if (require.main === module) {
+    start().catch(err => {
+        console.error('❌ Fatal server start error:', err.message);
+        if (err.stack) console.error(err.stack);
+        process.exit(1);
+    });
+}
+
+module.exports = { start, shutdown, validateEnvironment };
+
+

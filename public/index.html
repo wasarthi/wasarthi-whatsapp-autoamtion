@@ -621,9 +621,56 @@
                 </form>
             </div>
 
+            <div class="card">
+                <h2 class="card-title">Import from CSV</h2>
+                <p class="card-note">Columns matched by name, so headers like "Mobile Number" or "WhatsApp #" work
+                    the same as "phone" — <code>phone</code> is the only required column.
+                    <a href="#" id="downloadCsvTemplate">Download a template</a> if you want the exact format.</p>
+                <div class="csv-import-row">
+                    <input type="file" id="csvFileInput" accept=".csv,text/csv" class="sr-only">
+                    <label for="csvFileInput" class="btn btn-secondary" id="csvFileLabel" tabindex="0" role="button">
+                        <span data-icon="upload" aria-hidden="true"></span> Choose CSV file
+                    </label>
+                    <span id="csvFileName" style="color:var(--color-text-secondary);font-size:.85rem"></span>
+                </div>
+                <div id="csvImportResult" style="display:none;margin-top:var(--space-md)"></div>
+            </div>
+
             <div class="toolbar">
                 <div class="search-box">
                     <input type="search" id="contactSearch" placeholder="Search contacts…" aria-label="Search contacts">
+                </div>
+            </div>
+
+            <div class="card quick-select-card">
+                <h2 class="card-title" style="font-size:.95rem">Quick-select for outreach</h2>
+                <div class="quick-select-row">
+                    <label for="quickSelectCount" class="sr-only">Number to select</label>
+                    <input type="number" id="quickSelectCount" value="20" min="1" max="300" step="1">
+                    <div class="quick-select-presets">
+                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="10">10</button>
+                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="20">20</button>
+                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="50">50</button>
+                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="100">100</button>
+                    </div>
+                    <button type="button" class="btn btn-sm btn-primary" id="quickSelectBtn">Select next N</button>
+                    <label class="quick-select-checkbox">
+                        <input type="checkbox" id="quickSelectIncludeReached">
+                        Include already-reached contacts
+                    </label>
+                </div>
+                <p class="card-note" style="margin:8px 0 0">Picks from contacts <strong>not yet sent an outreach message</strong> first
+                    (top of the currently filtered/searched list), so repeated batches of 20 naturally work through your list without
+                    re-messaging the same people. Check the box above if you specifically want to re-reach people.</p>
+            </div>
+
+            <div class="selection-bar" id="contactsSelectionBar" style="display:none">
+                <span id="contactsSelectionCount">0 selected</span>
+                <div class="selection-bar-actions">
+                    <button type="button" class="btn btn-sm btn-secondary" id="clearSelectionBtn">Clear</button>
+                    <button type="button" class="btn btn-sm btn-primary" id="openOutreachBtn">
+                        <span data-icon="send" aria-hidden="true"></span> Send Outreach
+                    </button>
                 </div>
             </div>
 
@@ -632,15 +679,17 @@
                     <table class="data-table" aria-label="Contacts list">
                         <thead>
                             <tr>
+                                <th scope="col" style="width:2.5rem"><input type="checkbox" id="contactsSelectAll" aria-label="Select all contacts"></th>
                                 <th scope="col">Name</th>
                                 <th scope="col">Phone</th>
                                 <th scope="col">Label</th>
+                                <th scope="col">Reached</th>
                                 <th scope="col">Added</th>
                                 <th scope="col"><span class="sr-only">Actions</span></th>
                             </tr>
                         </thead>
                         <tbody id="contactsBody">
-                            <tr><td colspan="5" class="empty-state">Loading contacts…</td></tr>
+                            <tr><td colspan="7" class="empty-state">Loading contacts…</td></tr>
                         </tbody>
                     </table>
                 </div>
@@ -760,11 +809,6 @@
                         <div class="form-group">
                             <label for="settAwayMessage">Away Message</label>
                             <textarea id="settAwayMessage" rows="2" placeholder="Sent when away mode is on…"></textarea>
-                        </div>
-
-                        <div class="form-group">
-                            <label for="settWelcomeMessage">Welcome Message</label>
-                            <textarea id="settWelcomeMessage" rows="2" placeholder="Sent to new contacts…"></textarea>
                         </div>
 
                         <button type="submit" class="btn btn-primary" id="saveSettingsBtn">Save Settings</button>
@@ -974,6 +1018,52 @@
         </div>
         <div class="modal-body" id="dealModalBody">
             <!-- filled by JS -->
+        </div>
+    </div>
+</div>
+
+<!-- ── Outreach Modal ── -->
+<div class="modal-backdrop" id="outreachModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
+    <div class="modal" id="outreachModal">
+        <div class="modal-header">
+            <h2 id="outreachModalTitle">Send Outreach</h2>
+            <button class="modal-close" id="outreachModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+            <div class="outreach-warning">
+                <span data-icon="triangle-alert" aria-hidden="true"></span>
+                <span>WhatsApp's own terms prohibit bulk/automated messaging, and accounts that message many
+                    people in a short window risk being flagged or banned — this includes numbers connected
+                    through this dashboard. Only message contacts who've messaged you first or clearly opted
+                    in. Sends go out with a randomized delay between each; there's no way to make bulk
+                    outreach fully risk-free.</span>
+            </div>
+
+            <p id="outreachRecipientCount" style="font-weight:600;margin-bottom:var(--space-sm)"></p>
+
+            <div id="outreachComposeView">
+                <div class="form-group">
+                    <label for="outreachMessage">Message</label>
+                    <textarea id="outreachMessage" rows="5" placeholder="Hi {{name}}, ..."></textarea>
+                    <div style="font-size:.78rem;color:var(--color-text-secondary);margin-top:4px">
+                        Use <code>{{name}}</code> to personalize with each contact's saved name.
+                    </div>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="outreachCancelBtn">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="outreachSendBtn">
+                        <span data-icon="send" aria-hidden="true"></span> Send
+                    </button>
+                </div>
+            </div>
+
+            <div id="outreachProgressView" style="display:none">
+                <p id="outreachProgressSummary" style="margin-bottom:var(--space-sm)"></p>
+                <div class="outreach-progress-list" id="outreachProgressList"></div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-primary" id="outreachDoneBtn" style="display:none">Done</button>
+                </div>
+            </div>
         </div>
     </div>
 </div>

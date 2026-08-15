@@ -1192,6 +1192,12 @@ async function testChatbot() {
 // ═══════════════════════════════════════════════════════════
 //  CONTACTS
 // ═══════════════════════════════════════════════════════════
+// Contacts currently checked for bulk outreach — cleared on every reload
+// (a checked contact that scrolls out of a new search/filter shouldn't
+// silently stay "selected" for a send the user can no longer see).
+let SELECTED_CONTACTS = new Map(); // id -> { id, phone, name }
+let LAST_LOADED_CONTACTS = [];
+
 async function loadContacts() {
     clearErrorBanner('contactsError');
     try {
@@ -1200,16 +1206,21 @@ async function loadContacts() {
         if (search) endpoint += `?search=${encodeURIComponent(search)}`;
 
         const contacts = await api(endpoint);
+        LAST_LOADED_CONTACTS = contacts;
+        SELECTED_CONTACTS.clear();
+        updateSelectionBar();
         const tbody    = document.getElementById('contactsBody');
+        const selectAll = document.getElementById('contactsSelectAll');
+        if (selectAll) selectAll.checked = false;
 
         if (contacts.length === 0) {
             tbody.innerHTML = `
                 <tr>
-                    <td colspan="5">
+                    <td colspan="7">
                         <div class="empty-state">
                             <span class="empty-state-icon" aria-hidden="true">${Icon('users')}</span>
                             <div class="empty-state-title">No contacts found</div>
-                            <p>${search ? 'Try a different search term.' : 'Add your first contact above!'}</p>
+                            <p>${search ? 'Try a different search term.' : 'Add your first contact above, or import a CSV!'}</p>
                         </div>
                     </td>
                 </tr>`;
@@ -1218,9 +1229,13 @@ async function loadContacts() {
 
         tbody.innerHTML = contacts.map(c => `
             <tr>
+                <td><input type="checkbox" class="contact-row-check" data-id="${c.id}" data-phone="${escapeHtml(c.phone)}" data-name="${escapeHtml(c.name || '')}" data-reached="${c.last_outreach_at ? '1' : '0'}" aria-label="Select ${escapeHtml(c.name || c.phone)}"></td>
                 <td><strong>${escapeHtml(c.name) || '—'}</strong></td>
                 <td style="color:var(--color-text-secondary)">${escapeHtml(c.phone)}</td>
                 <td>${c.label ? `<span class="badge badge-incoming">${escapeHtml(c.label)}</span>` : '—'}</td>
+                <td>${c.last_outreach_at
+                    ? `<span class="reached-pill" title="${formatDate(c.last_outreach_at)}">${Icon('check-circle')} ${formatDate(c.last_outreach_at)}</span>`
+                    : `<span class="not-reached-label">Not yet</span>`}</td>
                 <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(c.created_at)}</td>
                 <td>
                     <button
@@ -1232,8 +1247,58 @@ async function loadContacts() {
                 </td>
             </tr>
         `).join('');
+
+        tbody.querySelectorAll('.contact-row-check').forEach(cb => {
+            cb.addEventListener('change', () => {
+                const id = Number(cb.dataset.id);
+                if (cb.checked) SELECTED_CONTACTS.set(id, { id, phone: cb.dataset.phone, name: cb.dataset.name, reached: cb.dataset.reached === '1' });
+                else SELECTED_CONTACTS.delete(id);
+                updateSelectionBar();
+            });
+        });
     } catch (err) {
         showErrorBanner('contactsError', 'Failed to load contacts.', loadContacts);
+    }
+}
+
+function updateSelectionBar() {
+    const bar = document.getElementById('contactsSelectionBar');
+    const count = document.getElementById('contactsSelectionCount');
+    if (!bar || !count) return;
+    const n = SELECTED_CONTACTS.size;
+    bar.style.display = n > 0 ? 'flex' : 'none';
+    count.textContent = `${n} contact${n === 1 ? '' : 's'} selected`;
+    if (typeof hydrateIcons === 'function') hydrateIcons(bar);
+}
+
+/**
+ * Replaces the current selection with the next `n` contacts due for
+ * outreach — "due" meaning never sent one before, unless the
+ * "include already-reached" box is checked. Pulls from whatever's
+ * currently loaded (respects the active search filter) in the order the
+ * table shows them, so clicking this repeatedly after each send batch
+ * naturally works through the list without hand-picking rows.
+ */
+function quickSelectNext(n) {
+    const includeReached = document.getElementById('quickSelectIncludeReached').checked;
+    const pool = LAST_LOADED_CONTACTS.filter(c => includeReached || !c.last_outreach_at);
+    const picked = pool.slice(0, n);
+
+    SELECTED_CONTACTS.clear();
+    picked.forEach(c => SELECTED_CONTACTS.set(c.id, { id: c.id, phone: c.phone, name: c.name, reached: !!c.last_outreach_at }));
+
+    document.querySelectorAll('.contact-row-check').forEach(cb => {
+        cb.checked = SELECTED_CONTACTS.has(Number(cb.dataset.id));
+    });
+    document.getElementById('contactsSelectAll').checked = picked.length > 0 && picked.length === LAST_LOADED_CONTACTS.length;
+    updateSelectionBar();
+
+    if (picked.length === 0) {
+        showToast(includeReached ? 'No contacts to select' : 'Everyone in this list has already been reached — check "include already-reached" to pick anyway', 'info');
+    } else if (picked.length < n) {
+        showToast(`Only ${picked.length} contact${picked.length === 1 ? '' : 's'} available — selected all of them`, 'info');
+    } else {
+        showToast(`Selected ${picked.length} contacts`, 'success');
     }
 }
 
@@ -1245,6 +1310,157 @@ async function deleteContact(id) {
         loadContacts();
     } catch (err) {
         showToast('Failed to delete contact', 'error');
+    }
+}
+
+// ─── CSV import ─────────────────────────────────────────────
+function downloadCsvTemplate() {
+    const csv = 'phone,name,label,notes\n919876543210,Jane Doe,Customer,Met at the trade show\n919812345678,John Smith,Lead,';
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url;
+    a.download = 'contacts_template.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+}
+
+function handleCsvFileSelected(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    document.getElementById('csvFileName').textContent = file.name;
+
+    // 1MB matches the server's JSON body limit — catch an oversized file
+    // client-side with a clear reason instead of a generic request-failed error.
+    if (file.size > 1024 * 1024) {
+        showToast('That file is too large (over 1MB) — split it into smaller files and import each separately', 'error');
+        e.target.value = '';
+        return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+        const resultBox = document.getElementById('csvImportResult');
+        resultBox.style.display = 'block';
+        resultBox.innerHTML = `<p style="color:var(--color-text-secondary)">Importing…</p>`;
+        try {
+            const result = await api('/api/contacts/import', {
+                method: 'POST',
+                body: JSON.stringify({ csv: reader.result })
+            });
+            const parts = [];
+            if (result.imported) parts.push(`${result.imported} added`);
+            if (result.updated)  parts.push(`${result.updated} updated`);
+            if (result.skipped)  parts.push(`${result.skipped} skipped`);
+            resultBox.innerHTML = `
+                <p style="color:var(--color-success);font-weight:600">
+                    ${Icon('check-circle')} Import complete — ${parts.join(', ') || 'nothing to do'} (of ${result.total} rows).
+                </p>
+                ${result.errors.length ? `
+                    <details style="margin-top:8px">
+                        <summary style="cursor:pointer;color:var(--color-text-secondary);font-size:.85rem">${result.errors.length} row${result.errors.length === 1 ? '' : 's'} skipped — why</summary>
+                        <ul style="font-size:.8rem;color:var(--color-text-secondary);margin-top:6px">
+                            ${result.errors.slice(0, 50).map(e => `<li>Row ${e.row}: ${escapeHtml(e.reason)}</li>`).join('')}
+                            ${result.errors.length > 50 ? `<li>…and ${result.errors.length - 50} more</li>` : ''}
+                        </ul>
+                    </details>` : ''}
+            `;
+            showToast('CSV import complete', 'success');
+            loadContacts();
+        } catch (err) {
+            resultBox.innerHTML = `<p style="color:var(--color-error)">${Icon('x-circle')} ${escapeHtml(err.message || 'Import failed')}</p>`;
+        } finally {
+            e.target.value = '';
+        }
+    };
+    reader.onerror = () => showToast('Could not read that file', 'error');
+    reader.readAsText(file);
+}
+
+// ─── Bulk outreach ──────────────────────────────────────────
+let OUTREACH_POLL_TIMER = null;
+
+function openOutreachModal() {
+    if (SELECTED_CONTACTS.size === 0) return;
+    const total = SELECTED_CONTACTS.size;
+    const alreadyReached = Array.from(SELECTED_CONTACTS.values()).filter(c => c.reached).length;
+
+    let recipText = `Sending to ${total} contact${total === 1 ? '' : 's'}`;
+    if (alreadyReached > 0) {
+        recipText += ` — <span style="color:var(--color-warning)">${alreadyReached} of these ${alreadyReached === 1 ? 'has' : 'have'} already been sent an outreach message before</span>`;
+    }
+    document.getElementById('outreachRecipientCount').innerHTML = recipText;
+
+    document.getElementById('outreachMessage').value = '';
+    document.getElementById('outreachComposeView').style.display = '';
+    document.getElementById('outreachProgressView').style.display = 'none';
+    document.getElementById('outreachSendBtn').disabled = false;
+    document.getElementById('outreachModalBackdrop').style.display = 'flex';
+    if (typeof hydrateIcons === 'function') hydrateIcons(document.getElementById('outreachModalBackdrop'));
+}
+
+function closeOutreachModal() {
+    if (OUTREACH_POLL_TIMER) { clearTimeout(OUTREACH_POLL_TIMER); OUTREACH_POLL_TIMER = null; }
+    document.getElementById('outreachModalBackdrop').style.display = 'none';
+}
+
+async function submitOutreach() {
+    const message = document.getElementById('outreachMessage').value.trim();
+    if (!message) { showToast('Write a message first', 'error'); return; }
+
+    const btn = document.getElementById('outreachSendBtn');
+    btn.disabled = true;
+
+    try {
+        const contactIds = Array.from(SELECTED_CONTACTS.keys());
+        const { jobId, total } = await api('/api/contacts/outreach', {
+            method: 'POST',
+            body: JSON.stringify({ contactIds, message })
+        });
+
+        document.getElementById('outreachComposeView').style.display = 'none';
+        document.getElementById('outreachProgressView').style.display = 'block';
+        document.getElementById('outreachDoneBtn').style.display = 'none';
+        document.getElementById('outreachProgressList').innerHTML = '';
+        document.getElementById('outreachProgressSummary').textContent = `Sending to ${total} contacts — this runs in the background with a delay between each send, so it'll take a while. You can close this and it'll keep going.`;
+
+        pollOutreachJob(jobId);
+    } catch (err) {
+        showToast(err.message || 'Could not start outreach', 'error');
+        btn.disabled = false;
+    }
+}
+
+async function pollOutreachJob(jobId) {
+    try {
+        const job = await api(`/api/contacts/outreach/${jobId}`);
+        const list = document.getElementById('outreachProgressList');
+        list.innerHTML = job.results.map(r => `
+            <div class="outreach-progress-row ${r.status === 'sent' ? 'ok' : 'fail'}">
+                <span>${escapeHtml(r.name || r.phone)}</span>
+                <span>${r.status === 'sent' ? Icon('check-circle') : (r.reason ? escapeHtml(r.reason) : 'failed')}</span>
+            </div>
+        `).join('');
+
+        const doneCount = job.sent + job.failed + job.skipped;
+        document.getElementById('outreachProgressSummary').textContent =
+            job.status === 'done'
+                ? `Done — ${job.sent} sent, ${job.failed} failed, ${job.skipped} skipped.`
+                : `Sending… ${doneCount}/${job.total} processed so far.`;
+
+        if (job.status === 'done') {
+            document.getElementById('outreachDoneBtn').style.display = '';
+            showToast(`Outreach finished — ${job.sent} sent`, job.failed > job.sent ? 'error' : 'success');
+            SELECTED_CONTACTS.clear();
+            loadContacts();
+        } else {
+            OUTREACH_POLL_TIMER = setTimeout(() => pollOutreachJob(jobId), 2000);
+        }
+    } catch (err) {
+        document.getElementById('outreachProgressSummary').textContent = 'Lost track of this job — it may still be sending in the background.';
     }
 }
 
@@ -1600,6 +1816,50 @@ document.addEventListener('DOMContentLoaded', async () => {
         clearTimeout(contactSearchTimeout);
         contactSearchTimeout = setTimeout(loadContacts, 300);
     });
+
+    // ── CSV import ───────────────────────────────────────────
+    document.getElementById('csvFileInput').addEventListener('change', handleCsvFileSelected);
+    document.getElementById('downloadCsvTemplate').addEventListener('click', (e) => {
+        e.preventDefault();
+        downloadCsvTemplate();
+    });
+
+    // ── Contacts selection (select-all / clear) ─────────────
+    document.getElementById('contactsSelectAll').addEventListener('change', (e) => {
+        const checked = e.target.checked;
+        document.querySelectorAll('.contact-row-check').forEach(cb => {
+            cb.checked = checked;
+            cb.dispatchEvent(new Event('change'));
+        });
+    });
+    document.getElementById('clearSelectionBtn').addEventListener('click', () => {
+        SELECTED_CONTACTS.clear();
+        document.querySelectorAll('.contact-row-check').forEach(cb => { cb.checked = false; });
+        document.getElementById('contactsSelectAll').checked = false;
+        updateSelectionBar();
+    });
+
+    // ── Quick-select N for outreach ──────────────────────────
+    document.querySelectorAll('.quick-select-preset').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.getElementById('quickSelectCount').value = btn.dataset.n;
+            quickSelectNext(Number(btn.dataset.n));
+        });
+    });
+    document.getElementById('quickSelectBtn').addEventListener('click', () => {
+        const n = Math.max(1, parseInt(document.getElementById('quickSelectCount').value, 10) || 0);
+        quickSelectNext(n);
+    });
+
+    // ── Outreach modal ───────────────────────────────────────
+    document.getElementById('openOutreachBtn').addEventListener('click', openOutreachModal);
+    document.getElementById('outreachModalClose').addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachCancelBtn').addEventListener('click', closeOutreachModal);
+    document.getElementById('outreachModalBackdrop').addEventListener('click', (e) => {
+        if (e.target.id === 'outreachModalBackdrop') closeOutreachModal();
+    });
+    document.getElementById('outreachSendBtn').addEventListener('click', submitOutreach);
+    document.getElementById('outreachDoneBtn').addEventListener('click', closeOutreachModal);
 
     // ── Message search & filter ─────────────────────────────
     let messageSearchTimeout;

@@ -6,6 +6,12 @@ node_modules/
 .env.local
 .env.*.local
 
+# opencode config contains a live API key — never commit it
+opencode.json
+
+# Tooling binaries that shouldn't be in the repo
+*.exe
+
 # WhatsApp Web Session & Auth Data (CRITICAL: Do not commit tokens)
 .wwebjs_auth/
 .wwebjs_cache/
@@ -19,6 +25,12 @@ data/
 *.sqlite
 *.db
 
+# Test isolation directories (per-test PERSIST_ROOT)
+test-data/
+
+# Coverage output
+coverage/
+
 # Logs & Debugging
 logs
 *.log
@@ -31,3 +43,8 @@ yarn-error.log*
 Thumbs.db
 .vscode/
 .idea/
+
+# IDE/Editor temp files
+*.swp
+*.swo
+*~
