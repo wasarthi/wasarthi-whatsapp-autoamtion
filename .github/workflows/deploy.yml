@@ -1,0 +1,45 @@
+name: Deploy to production
+
+# Runs on every push to updated-WA. The runner checks out the code itself
+# (no GitHub credentials needed on the server for that), rsyncs it to the
+# EC2 box over SSH, then rebuilds the container there with Docker Compose.
+# If `docker compose build` fails, Compose never touches the
+# currently-running container, so a broken commit here does not take the
+# live app down — it just fails this workflow and leaves the previous
+# version running.
+on:
+  push:
+    branches:
+      - updated-WA
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H ${{ secrets.SSH_HOST }} >> ~/.ssh/known_hosts
+
+      - name: Sync code to server
+        run: |
+          rsync -az --delete \
+            --exclude='.git' --exclude='node_modules' \
+            --exclude='.wwebjs_auth' --exclude='.wwebjs_cache' --exclude='data' \
+            --exclude='.env' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            ./ ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/home/ubuntu/whatsapp-automation/
+
+      - name: Rebuild and restart
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes ${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }} '
+            set -e
+            cd /home/ubuntu/whatsapp-automation
+            sudo docker compose up -d --build
+            sleep 5
+            curl -sf http://localhost:3000/health
+          '
