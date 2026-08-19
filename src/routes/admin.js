@@ -3,9 +3,12 @@ const router = express.Router();
 
 const {
     listUsers, getUserById, updateUser, deleteUserCascade,
-    getUserStats, getPlatformStats
-} = require('../database');
-const { getStatus, destroyClientForUser } = require('../whatsapp-client');
+    getUserStats, getPlatformStats, countOrphanedRows
+} = require('../services/database');
+const { getStatus, destroyClientForUser } = require('../services/whatsapp-client');
+const { revokeAllSessionsForUser } = require('../config/auth');
+const { requireId, optionalString, clampInt, requireEnum, LIMITS } = require('../utils/validate');
+const { asyncHandler } = require('../utils/errors');
 
 function publicUser(u) {
     if (!u) return null;
@@ -15,91 +18,116 @@ function publicUser(u) {
 
 // ─── Platform-wide overview ───────────────────────────────────
 router.get('/stats', (req, res) => {
-    try {
-        res.json({ success: true, data: getPlatformStats() });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    res.json({ success: true, data: getPlatformStats() });
 });
 
 // ─── List every account with usage + WhatsApp connection status ──
 router.get('/users', (req, res) => {
-    try {
-        const users = listUsers().map(u => {
-            const stats = getUserStats(u.id);
-            const wa = getStatus(u.id);
-            return { ...u, stats, whatsapp: wa };
-        });
-        res.json({ success: true, data: users });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    const users = listUsers().map(u => {
+        const stats = getUserStats(u.id);
+        const wa = getStatus(u.id);
+        return { ...u, stats, whatsapp: wa };
+    });
+    res.json({ success: true, data: users });
 });
 
 // ─── Single account detail ────────────────────────────────────
 router.get('/users/:id', (req, res) => {
-    try {
-        const user = getUserById(req.params.id);
-        if (!user) return res.status(404).json({ success: false, error: 'User not found' });
-        const stats = getUserStats(user.id);
-        const wa = getStatus(user.id);
-        res.json({ success: true, data: { ...publicUser(user), stats, whatsapp: wa } });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
-    }
+    const id = requireId(req.params.id, 'user id');
+    const user = getUserById(id);
+    if (!user) return res.status(404).json({ success: false, error: 'User not found' });
+    const stats = getUserStats(user.id);
+    const wa = getStatus(user.id);
+    res.json({ success: true, data: { ...publicUser(user), stats, whatsapp: wa } });
 });
 
 // ─── Suspend / activate / change plan / set limits / change role ──
-router.patch('/users/:id', (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        const target = getUserById(id);
-        if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+router.patch('/users/:id', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'user id');
+    const target = getUserById(id);
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
 
-        if (id === req.user.id && (req.body.status === 'suspended' || req.body.role === 'user')) {
-            return res.status(400).json({ success: false, error: 'You cannot suspend or demote your own admin account.' });
-        }
-
-        const fields = {};
-        const { status, plan, message_limit, rule_limit, role, business_name, owner_name } = req.body || {};
-        if (status !== undefined && ['active', 'suspended'].includes(status)) fields.status = status;
-        if (plan !== undefined) fields.plan = String(plan).slice(0, 40);
-        if (message_limit !== undefined) fields.message_limit = Math.max(0, parseInt(message_limit, 10) || 0);
-        if (rule_limit !== undefined) fields.rule_limit = Math.max(0, parseInt(rule_limit, 10) || 0);
-        if (role !== undefined && ['admin', 'user'].includes(role)) fields.role = role;
-        if (business_name !== undefined) fields.business_name = business_name;
-        if (owner_name !== undefined) fields.owner_name = owner_name;
-
-        const updated = updateUser(id, fields);
-
-        // If suspended, tear down their live WhatsApp session so it can't keep sending.
-        if (fields.status === 'suspended') {
-            try { destroyClientForUser(id); } catch (e) { /* non-fatal */ }
-        }
-
-        res.json({ success: true, data: publicUser(updated) });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+    if (id === req.user.id && (req.body?.status === 'suspended' || req.body?.role === 'user')) {
+        return res.status(400).json({ success: false, error: 'You cannot suspend or demote your own admin account.' });
     }
-});
+
+    // Explicit allow-list, one field at a time. Anything not named here —
+    // email, password_hash, id, created_at — is not writable through this
+    // route no matter what the request body contains.
+    const fields = {};
+    const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+    const { status, plan, message_limit, rule_limit, role, business_name, owner_name } = body;
+
+    if (status !== undefined)  fields.status = requireEnum(status, ['active', 'suspended'], 'status');
+    if (role !== undefined)    fields.role = requireEnum(role, ['admin', 'user'], 'role');
+    if (plan !== undefined)    fields.plan = optionalString(plan, 'plan', 40);
+    if (message_limit !== undefined) fields.message_limit = clampInt(message_limit, { min: 0, max: 100000000, fallback: 0 });
+    if (rule_limit !== undefined)    fields.rule_limit = clampInt(rule_limit, { min: 0, max: 100000, fallback: 0 });
+    if (business_name !== undefined) fields.business_name = optionalString(business_name, 'business_name', LIMITS.CONTACT_NAME);
+    if (owner_name !== undefined)    fields.owner_name = optionalString(owner_name, 'owner_name', LIMITS.CONTACT_NAME);
+
+    const updated = updateUser(id, fields);
+
+    // Role changes must apply to sessions that already exist: a demoted admin
+    // holds a token carrying role:"admin", and although middleware/auth.js
+    // re-reads the role from the database on every request, revoking removes
+    // any reliance on that single downstream check.
+    //
+    // Suspension deliberately does NOT revoke tokens. The database status
+    // check already blocks a suspended user on their very next request, and it
+    // produces a 403 with code ACCOUNT_SUSPENDED — which is what tells the
+    // dashboard to show "your account has been suspended" instead of bouncing
+    // the user to the login page with no explanation, as a revoked-token 401
+    // would.
+    if (fields.role && fields.role !== target.role) {
+        revokeAllSessionsForUser(id);
+    }
+
+    // If suspended, tear down their live WhatsApp session (and its Chrome
+    // process, and its SSE streams) so it can't keep sending on their behalf.
+    if (fields.status === 'suspended') {
+        try { await destroyClientForUser(id); } catch (e) { /* non-fatal */ }
+    }
+
+    res.json({ success: true, data: publicUser(updated) });
+}));
 
 // ─── Delete an account and everything it owns ─────────────────
-router.delete('/users/:id', (req, res) => {
-    try {
-        const id = parseInt(req.params.id, 10);
-        if (id === req.user.id) {
-            return res.status(400).json({ success: false, error: 'You cannot delete your own account while logged in as it.' });
-        }
-        const target = getUserById(id);
-        if (!target) return res.status(404).json({ success: false, error: 'User not found' });
-
-        try { destroyClientForUser(id); } catch (e) { /* non-fatal */ }
-        deleteUserCascade(id);
-
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ success: false, error: error.message });
+router.delete('/users/:id', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'user id');
+    if (id === req.user.id) {
+        return res.status(400).json({ success: false, error: 'You cannot delete your own account while logged in as it.' });
     }
-});
+    const target = getUserById(id);
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+
+    // Order matters. Kill the live session first — awaited, unlike before, so
+    // the browser and its SSE streams are actually gone before the rows
+    // disappear underneath them. A background WhatsApp handler firing against
+    // a deleted user_id would otherwise re-insert orphaned message rows.
+    revokeAllSessionsForUser(id);
+    try { await destroyClientForUser(id); } catch (e) { /* non-fatal */ }
+
+    deleteUserCascade(id);
+
+    // Prove it. A cascade that silently missed a table leaves another
+    // tenant's dashboard counting rows nobody owns, and the next account to
+    // be assigned this id inherits them.
+    const leftovers = countOrphanedRows(id);
+    if (leftovers.total > 0) {
+        console.error(`❌ Account ${id} deletion left ${leftovers.total} orphaned rows:`, leftovers.byTable);
+        return res.status(500).json({
+            success: false,
+            error: 'The account was partially deleted. An administrator has been alerted.'
+        });
+    }
+
+    res.json({ success: true });
+}));
 
 module.exports = router;
+
+
+
+
+
