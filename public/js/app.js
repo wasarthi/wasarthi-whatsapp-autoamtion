@@ -1835,50 +1835,24 @@ function initCalendarSettings() {
 }
 
 // ─── QR / SSE ────────────────────────────────────────────────
+// Primary: real-time updates via Server-Sent Events.
+// Fallback: if no actionable SSE event arrives within 10s (cloud load
+// balancers / proxies sometimes buffer or drop EventSource connections),
+// a REST poll to /api/status every 5s ensures the QR code still reaches
+// the browser.
+let _sseReceivedActionable = false;
+let _statusPollTimer = null;
+
 function initSSE() {
+    _sseReceivedActionable = false;
     const eventSource = new EventSource('/api/qr-stream');
 
     eventSource.onmessage = function (event) {
         try {
             const data        = JSON.parse(event.data);
-            const qrLoading   = document.getElementById('qrLoading');
-            const qrImage     = document.getElementById('qrImage');
-            const qrSuccess   = document.getElementById('qrSuccess');
-            const statusDot   = document.querySelector('#connectionStatus .status-dot');
-            const statusText  = document.querySelector('#connectionStatus .status-text');
-            const connInfo    = document.getElementById('connectionInfo');
-
-            const show = (el) => { if (el) el.style.display = ''; };
-            const hide = (el) => { if (el) el.style.display = 'none'; };
-
-            if (data.type === 'qr') {
-                show(qrLoading); hide(qrImage); hide(qrSuccess);
-                if (qrImage) { qrImage.src = data.data; qrImage.style.display = 'block'; }
-                if (qrLoading) qrLoading.style.display = 'none';
-                if (statusDot)  statusDot.className  = 'status-dot error';
-                if (statusText) statusText.textContent = 'Scan QR Code';
-                if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-warning)">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
-
-            } else if (data.type === 'ready') {
-                hide(qrLoading); hide(qrImage); show(qrSuccess);
-                if (statusDot)  statusDot.className  = 'status-dot connected';
-                if (statusText) statusText.textContent = 'Connected';
-                if (connInfo)   connInfo.innerHTML   = `
-                    <p class="connected-text">${Icon('check-circle', 'icon-inline')}Connected to WhatsApp</p>
-                    <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
-
-            } else if (data.type === 'disconnected' || data.type === 'error') {
-                show(qrLoading); hide(qrImage); hide(qrSuccess);
-                if (statusDot)  statusDot.className  = 'status-dot error';
-                if (statusText) statusText.textContent = 'Disconnected';
-                if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
-
-            } else if (data.type === 'loading') {
-                show(qrLoading); hide(qrImage); hide(qrSuccess);
-                if (statusDot)  statusDot.className  = 'status-dot demo';
-                if (statusText) statusText.textContent = 'Initializing…';
-                if (connInfo)   connInfo.innerHTML   = '<p>Loading WhatsApp Client…</p>';
-            }
+            // Any event other than the initial 'loading' means SSE is working
+            if (data.type !== 'loading') _sseReceivedActionable = true;
+            applyConnectionState(data);
         } catch (e) {
             console.error('SSE parse error:', e);
         }
@@ -1887,7 +1861,83 @@ function initSSE() {
     eventSource.onerror = function () {
         console.warn('SSE connection lost — browser will auto-reconnect.');
     };
+
+    // ── REST fallback: kick in if SSE hasn't delivered after 10s ──
+    setTimeout(() => {
+        if (!_sseReceivedActionable) {
+            console.warn('SSE has not delivered a QR/ready event — starting REST polling fallback.');
+            startStatusPolling();
+        }
+    }, 10000);
 }
+
+function startStatusPolling() {
+    if (_statusPollTimer) return; // already polling
+    _statusPollTimer = setInterval(async () => {
+        try {
+            const res = await api('/api/status');
+            const s = res.data || res;
+            if (s.connected) {
+                applyConnectionState({ type: 'ready', phone: s.phone });
+                stopStatusPolling();
+            } else if (s.qr) {
+                applyConnectionState({ type: 'qr', data: s.qr });
+            } else if (s.error) {
+                applyConnectionState({ type: 'error', data: s.error });
+            } else if (s.initializing) {
+                applyConnectionState({ type: 'loading' });
+            }
+        } catch (e) {
+            // API unreachable — keep polling silently
+        }
+    }, 5000);
+}
+
+function stopStatusPolling() {
+    if (_statusPollTimer) { clearInterval(_statusPollTimer); _statusPollTimer = null; }
+}
+
+function applyConnectionState(data) {
+    const qrLoading   = document.getElementById('qrLoading');
+    const qrImage     = document.getElementById('qrImage');
+    const qrSuccess   = document.getElementById('qrSuccess');
+    const statusDot   = document.querySelector('#connectionStatus .status-dot');
+    const statusText  = document.querySelector('#connectionStatus .status-text');
+    const connInfo    = document.getElementById('connectionInfo');
+
+    const show = (el) => { if (el) el.style.display = ''; };
+    const hide = (el) => { if (el) el.style.display = 'none'; };
+
+    if (data.type === 'qr') {
+        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (qrImage) { qrImage.src = data.data; qrImage.style.display = 'block'; }
+        if (qrLoading) qrLoading.style.display = 'none';
+        if (statusDot)  statusDot.className  = 'status-dot error';
+        if (statusText) statusText.textContent = 'Scan QR Code';
+        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-warning)">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
+
+    } else if (data.type === 'ready') {
+        hide(qrLoading); hide(qrImage); show(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot connected';
+        if (statusText) statusText.textContent = 'Connected';
+        if (connInfo)   connInfo.innerHTML   = `
+            <p class="connected-text">${Icon('check-circle', 'icon-inline')}Connected to WhatsApp</p>
+            <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
+
+    } else if (data.type === 'disconnected' || data.type === 'error') {
+        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot error';
+        if (statusText) statusText.textContent = 'Disconnected';
+        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+
+    } else if (data.type === 'loading') {
+        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        if (statusDot)  statusDot.className  = 'status-dot demo';
+        if (statusText) statusText.textContent = 'Initializing…';
+        if (connInfo)   connInfo.innerHTML   = '<p>Loading WhatsApp Client…</p>';
+    }
+}
+
 
 // ═══════════════════════════════════════════════════════════
 //  UTILITIES

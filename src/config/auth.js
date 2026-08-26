@@ -1,6 +1,7 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const fs = require('fs');
+const path = require('path');
 
 // Session secret lives in the same PERSIST_ROOT as the database — see
 // src/config/paths.js for the resolution order.

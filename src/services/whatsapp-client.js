@@ -2,7 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs     = require('fs');
 const path   = require('path');
-const { AUTH_ROOT } = require('../config/paths');
+const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
 
 // ─── Per-user session registry ─────────────────────────────────
@@ -281,10 +281,20 @@ function initWhatsAppClient(userId) {
             // web.whatsapp.com only when nothing cached matches — no GitHub
             // dependency, no stale pin.
             webVersionCache: {
-                type: 'local'
+                type: 'local',
+                path: CACHE_ROOT
             },
             puppeteer: {
-                headless: true,
+                headless: 'new',
+                // In Docker/Cloud, PUPPETEER_EXECUTABLE_PATH points to the
+                // apt-installed Chromium (see Dockerfile ENV). Without this,
+                // puppeteer looks for its own bundled Chrome which was skipped
+                // via PUPPETEER_SKIP_DOWNLOAD — and QR generation silently
+                // fails because client.initialize() throws before any QR
+                // event fires.
+                ...(process.env.PUPPETEER_EXECUTABLE_PATH
+                    ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
+                    : {}),
                 args: [
                     // --no-sandbox is required because this runs as a
                     // non-root user inside a container without the kernel
@@ -617,13 +627,16 @@ function getClient(userId) {
 
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
-    if (!s) return { connected: false, phone: null, started: false, error: null };
+    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null };
     return {
         connected: s.isConnected,
         phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
         started: !!(s.client || s.isInitializing),
         initializing: !!s.isInitializing,
-        error: s.lastError || null
+        error: s.lastError || null,
+        // Expose QR data URL so the frontend can fetch it via REST polling
+        // when the SSE stream is blocked by a cloud load balancer / proxy.
+        qr: s.currentQR || null
     };
 }
 
