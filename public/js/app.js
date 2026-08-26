@@ -1901,12 +1901,17 @@ function applyConnectionState(data) {
     const qrLoading   = document.getElementById('qrLoading');
     const qrImage     = document.getElementById('qrImage');
     const qrSuccess   = document.getElementById('qrSuccess');
+    const qrContainer = document.getElementById('qrContainer');
     const statusDot   = document.querySelector('#connectionStatus .status-dot');
     const statusText  = document.querySelector('#connectionStatus .status-text');
     const connInfo    = document.getElementById('connectionInfo');
 
     const show = (el) => { if (el) el.style.display = ''; };
     const hide = (el) => { if (el) el.style.display = 'none'; };
+
+    // Remove any previous reconnect button if present
+    const oldReconnect = document.getElementById('qrReconnectBtnContainer');
+    if (oldReconnect) oldReconnect.remove();
 
     if (data.type === 'qr') {
         show(qrLoading); hide(qrImage); hide(qrSuccess);
@@ -1925,10 +1930,31 @@ function applyConnectionState(data) {
             <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
 
     } else if (data.type === 'disconnected' || data.type === 'error') {
-        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        hide(qrLoading); hide(qrImage); hide(qrSuccess);
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = 'Disconnected';
         if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+
+        if (qrContainer && !document.getElementById('qrReconnectBtnContainer')) {
+            const reconnectDiv = document.createElement('div');
+            reconnectDiv.id = 'qrReconnectBtnContainer';
+            reconnectDiv.style.textAlign = 'center';
+            reconnectDiv.style.padding = '24px 16px';
+            reconnectDiv.innerHTML = `
+                <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;">${Icon('refresh-cw', 'icon-inline')} Connect & Show QR Code</button>
+            `;
+            qrContainer.appendChild(reconnectDiv);
+            document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
+                reconnectDiv.innerHTML = `<div class="qr-loading">${Icon('loader', 'icon-inline')} Starting WhatsApp Client…</div>`;
+                try {
+                    await api('/api/whatsapp/connect', { method: 'POST' });
+                    applyConnectionState({ type: 'loading' });
+                } catch (e) {
+                    showToast(e.message || 'Failed to start connection', 'error');
+                }
+            });
+        }
 
     } else if (data.type === 'loading') {
         show(qrLoading); hide(qrImage); hide(qrSuccess);
@@ -2520,7 +2546,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (!confirm('Disconnect this WhatsApp number? You can reconnect any time by scanning a new QR code.')) return;
         try {
             await api('/api/whatsapp/disconnect', { method: 'POST' });
+            applyConnectionState({ type: 'disconnected' });
             showToast('WhatsApp disconnected.', 'success');
+            if (currentSection === 'dashboard') loadDashboard();
         } catch (err) {
             showToast(err.message || 'Failed to disconnect', 'error');
         }
@@ -2530,8 +2558,21 @@ document.addEventListener('DOMContentLoaded', async () => {
     loadDashboard();
     initSSE();
 
-    // ── Auto-refresh dashboard every 30 s ───────────────────
+    // ── Auto-refresh active section every 15 s ───────────────────
     setInterval(() => {
-        if (currentSection === 'dashboard') loadDashboard();
-    }, 30000);
+        // Skip background refresh if user is currently typing in an input or modal is open
+        const isEditing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
+        const isModalOpen = document.querySelector('.modal-backdrop[style*="display: block"], .modal-backdrop:not([style*="display: none"]):not([style*="display:none"])');
+        if (isEditing || isModalOpen) return;
+
+        if (currentSection === 'dashboard') {
+            loadDashboard();
+        } else if (currentSection === 'messages') {
+            loadMessages();
+        } else if (currentSection === 'leads') {
+            loadLeads();
+        } else if (currentSection === 'crm') {
+            loadCrm();
+        }
+    }, 15000);
 });

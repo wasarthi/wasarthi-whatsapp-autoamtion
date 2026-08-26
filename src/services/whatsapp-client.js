@@ -70,7 +70,8 @@ function newSessionState() {
         lastCrashTime: Date.now(),
         lastError: null,
         startedAt: null,
-        destroyed: false
+        destroyed: false,
+        userDisconnected: false
     };
 }
 
@@ -238,6 +239,7 @@ function initWhatsAppClient(userId) {
     }
     const s = getSession(userId);
     s.destroyed = false;
+    s.userDisconnected = false;
 
     if (s.isInitializing) {
         return { accepted: true, alreadyStarting: true };
@@ -489,17 +491,32 @@ async function destroyClientForUser(userId) {
     const s = getSession(userId, false);
     if (!s) return;
     s.destroyed = true;
+    s.userDisconnected = true;
     clearTimers(s);
     s.isConnected = false;
     s.isInitializing = false;
     s.currentQR = null;
 
     broadcastSSE(userId, { type: 'disconnected' });
-    for (const c of [...s.sseClients]) removeSseClient(s, c);
-    s.sseClients = [];
+
+    if (s.client) {
+        try {
+            await Promise.race([
+                s.client.logout(),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('logout timeout')), 4000))
+            ]);
+        } catch (e) { /* client may already be closed or disconnected */ }
+    }
 
     await safeDestroyClient(s);
-    sessions.delete(userId);
+
+    // Clean up saved auth directory on explicit disconnect so next connect is a clean fresh session
+    const authDir = authDataPath(userId);
+    try {
+        if (fs.existsSync(authDir)) {
+            fs.rmSync(authDir, { recursive: true, force: true });
+        }
+    } catch (e) { /* non-fatal */ }
 }
 
 /** Tears down every session — used by graceful shutdown. */
@@ -585,6 +602,8 @@ function addSSEClient(userId, req, res) {
         send({ type: 'ready', phone: s.client.info.wid.user });
     } else if (s.currentQR) {
         send({ type: 'qr', data: s.currentQR });
+    } else if (s.userDisconnected) {
+        send({ type: 'disconnected' });
     } else {
         send({ type: 'loading' });
         // Nothing has been started for this user yet — kick off a lazy connect.
