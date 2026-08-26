@@ -7,8 +7,20 @@
 # For a real deployment with a domain + automatic HTTPS, add Caddy in front —
 # see docker-compose.prod.yml + Caddyfile, and DEPLOY.md for the full steps.
 services:
+  fix-perms:
+    build: .
+    user: root
+    command: chown -R node:node /app/data /app/.wwebjs_auth /app/.wwebjs_cache
+    volumes:
+      - wa-data:/app/data
+      - wa-auth:/app/.wwebjs_auth
+      - wa-cache:/app/.wwebjs_cache
+
   app:
     build: .
+    depends_on:
+      fix-perms:
+        condition: service_completed_successfully
     restart: unless-stopped
     init: true
     env_file:
