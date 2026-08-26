@@ -32,6 +32,7 @@ const {
 } = require('./database');
 const { sendTextMessage } = require('./whatsapp-client');
 const { tryNormalizePhone } = require('../utils/validate');
+const { logOutreachEvent } = require('./google-calendar');
 
 let schedulerTask = null;
 let isRunning = false;
@@ -157,18 +158,41 @@ async function processPendingMessages() {
                 }
 
                 console.log(`✅ Scheduled message #${msg.id} sent`);
+                // Best-effort; a calendar-import-created scheduled message
+                // (see google-calendar.js) logging back to the same calendar
+                // it came from is harmless — it's tagged so a resync never
+                // re-imports it as a new send.
+                logOutreachEvent(msg.user_id, { phone, name: '', message: msg.body });
             } catch (error) {
-                summary.failed++;
-                console.error(`❌ Scheduled message #${msg.id} failed:`, error.message);
-                try {
-                    // Truncate: the message is shown in the dashboard, and a
-                    // raw stack from Puppeteer is neither useful nor safe there.
-                    const reason = /not connected/i.test(error.message)
-                        ? 'WhatsApp was not connected at the scheduled time'
-                        : String(error.message).split('\n')[0].slice(0, 300);
-                    updateScheduledMessageStatus(msg.id, 'failed', reason);
-                } catch (dbErr) {
-                    console.error('❌ Could not update failed status:', dbErr.message);
+                const isTimeout = error.message === 'sendTextMessage timeout';
+                if (isTimeout) {
+                    // A Promise.race timeout does NOT cancel the underlying send.
+                    // The message may still be delivered seconds later. Marking
+                    // it 'failed' would be wrong — the UI would show "send failed"
+                    // for a message the recipient already received, and an operator
+                    // retry would cause a duplicate. 'unknown' means "sent but
+                    // delivery not confirmed — do not resend without checking."
+                    summary.failed++;
+                    console.warn(`⏱️ Scheduled message #${msg.id} timed out — delivery unknown, will not auto-retry`);
+                    try {
+                        updateScheduledMessageStatus(msg.id, 'unknown',
+                            'Send timed out — message may or may not have been delivered. Check with the recipient before retrying.');
+                    } catch (dbErr) {
+                        console.error('❌ Could not update unknown status:', dbErr.message);
+                    }
+                } else {
+                    summary.failed++;
+                    console.error(`❌ Scheduled message #${msg.id} failed:`, error.message);
+                    try {
+                        // Truncate: the message is shown in the dashboard, and a
+                        // raw stack from Puppeteer is neither useful nor safe there.
+                        const reason = /not connected/i.test(error.message)
+                            ? 'WhatsApp was not connected at the scheduled time'
+                            : String(error.message).split('\n')[0].slice(0, 300);
+                        updateScheduledMessageStatus(msg.id, 'failed', reason);
+                    } catch (dbErr) {
+                        console.error('❌ Could not update failed status:', dbErr.message);
+                    }
                 }
             }
 

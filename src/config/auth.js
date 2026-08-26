@@ -1,18 +1,11 @@
 const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const fs = require('fs');
-const path = require('path');
 
-// ─── Session secret ─────────────────────────────────────────────
-// Order of preference: explicit env var, then a file persisted under the
-// data directory (so a restart doesn't log everyone out), then a fresh
-// random one.
-//
-// The file lives under PERSIST_ROOT for the same reason the database does:
-// on a host that gives you one mounted disk (Render), a secret written to
-// the image filesystem disappears on redeploy and every session dies.
-const persistRoot = process.env.PERSIST_ROOT || path.join(__dirname, '..');
-const secretPath = path.join(persistRoot, 'data', '.session_secret');
+// Session secret lives in the same PERSIST_ROOT as the database — see
+// src/config/paths.js for the resolution order.
+const { SECRET_PATH: secretPath } = require('./paths');
+
 
 const MIN_SECRET_LENGTH = 32;
 

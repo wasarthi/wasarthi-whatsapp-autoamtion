@@ -2,6 +2,7 @@ const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs     = require('fs');
 const path   = require('path');
+const { AUTH_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
 
 // ─── Per-user session registry ─────────────────────────────────
@@ -24,10 +25,9 @@ const MAX_CONCURRENT_SESSIONS = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SES
 const MAX_SSE_CLIENTS_PER_USER = parseInt(process.env.MAX_SSE_CLIENTS_PER_USER, 10) || 5;
 const MAX_SSE_CLIENTS_TOTAL = parseInt(process.env.MAX_SSE_CLIENTS_TOTAL, 10) || 500;
 
-// PERSIST_ROOT keeps session folders on the same mounted disk as the
-// database (see database.js) so a redeploy doesn't log every tenant's
-// WhatsApp out.
-const persistRoot = process.env.PERSIST_ROOT || path.join(__dirname, '..');
+// WhatsApp session auth folders live under AUTH_ROOT, which is part of
+// PERSIST_ROOT (see src/config/paths.js). This keeps sessions on the same
+// mounted disk as the database so a redeploy doesn't log every tenant out.
 
 let totalSseClients = 0;
 
@@ -53,7 +53,7 @@ function authDataPath(userId) {
     if (!Number.isSafeInteger(id) || id <= 0) {
         throw new Error('authDataPath requires a positive integer user id');
     }
-    return path.join(persistRoot, '.wwebjs_auth', `user_${id}`);
+    return path.join(AUTH_ROOT, `user_${id}`);
 }
 
 function newSessionState() {
@@ -268,9 +268,20 @@ function initWhatsAppClient(userId) {
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
+            // A local cache (bundled with whatsapp-web.js, tested against the
+            // exact library version installed) instead of a hardcoded remote
+            // fetch: the previous config pinned an old WhatsApp Web build
+            // (2.2412.54) fetched from GitHub on every single connection
+            // attempt — a stale/deprecated version and an extra network
+            // dependency in the critical path of "show the QR code", and a
+            // real cause of the QR taking a long time (or never appearing)
+            // if that fetch is slow or GitHub is unreachable. Local cache
+            // reads whatever the last successful session already saved to
+            // .wwebjs_cache/, and transparently fetches live from
+            // web.whatsapp.com only when nothing cached matches — no GitHub
+            // dependency, no stale pin.
             webVersionCache: {
-                type: 'remote',
-                remotePath: 'https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.2412.54.html'
+                type: 'local'
             },
             puppeteer: {
                 headless: true,

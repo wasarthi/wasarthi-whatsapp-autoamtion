@@ -52,7 +52,13 @@ COPY . .
 # paths — the SQLite database, the session-signing secret, and every
 # tenant's saved WhatsApp login. Mount them as named volumes (see
 # docker-compose.yml) or a rebuild wipes every connected account's session.
-RUN mkdir -p /app/data /app/.wwebjs_auth /app/.wwebjs_cache
+RUN mkdir -p /app/data /app/.wwebjs_auth /app/.wwebjs_cache \
+    && chown -R node:node /app
+
+# Drop root privileges for security — Chromium should never run as root,
+# and it prevents host filesystem compromise if the container is escaped.
+USER node
+
 VOLUME ["/app/data", "/app/.wwebjs_auth", "/app/.wwebjs_cache"]
 
 ENV NODE_ENV=production

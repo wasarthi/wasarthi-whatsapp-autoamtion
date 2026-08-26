@@ -45,6 +45,8 @@ const LIMITS = {
     MAX_PRODUCTS_PER_USER: 1000,
     MAX_PENDING_SCHEDULED_PER_USER: 2000,
     MAX_DEALS_PER_USER: 50000,
+    MAX_APPOINTMENTS_PER_USER: 20000,
+    APPOINTMENT_NOTES: 1000,
     // Pagination
     DEFAULT_PAGE_LIMIT: 100,
     MAX_PAGE_LIMIT: 500,
@@ -417,6 +419,38 @@ function sanitizeSpreadsheetCell(value) {
     return value;
 }
 
+// ─── Appointment booking ────────────────────────────────────────
+const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+/** Validates "HH:MM" 24-hour time strings used by the weekly availability template. */
+function assertHHMM(value, field) {
+    if (typeof value !== 'string' || !HHMM_RE.test(value)) {
+        throw new ValidationError(`${field} must be a 24-hour time in HH:MM format (e.g. "09:00").`, field);
+    }
+    return value;
+}
+
+/**
+ * Validates a working-days list: an array (or comma-separated string) of
+ * integers 0–6 (0 = Sunday, matching JS Date#getDay / Intl weekday order).
+ * Returns the canonical comma-separated string the DB column stores.
+ */
+function normalizeWorkingDays(value, field = 'workingDays') {
+    let arr = value;
+    if (typeof arr === 'string') arr = arr.split(',').map(s => s.trim()).filter(s => s !== '');
+    if (!Array.isArray(arr) || arr.length === 0) {
+        throw new ValidationError(`${field} must be a non-empty list of weekdays.`, field);
+    }
+    const days = arr.map(v => {
+        const n = Number(v);
+        if (!Number.isInteger(n) || n < 0 || n > 6) {
+            throw new ValidationError(`${field} must only contain integers 0-6 (0 = Sunday).`, field);
+        }
+        return n;
+    });
+    return [...new Set(days)].sort((a, b) => a - b).join(',');
+}
+
 // ─── Settings ──────────────────────────────────────────────────
 /**
  * PUT /api/settings used to write any key a client sent, at any length.
@@ -511,5 +545,7 @@ module.exports = {
     sanitizeSpreadsheetCell,
     validateSettingsPatch,
     SETTINGS_SCHEMA,
-    SERVER_OWNED_SETTINGS
+    SERVER_OWNED_SETTINGS,
+    assertHHMM,
+    normalizeWorkingDays
 };

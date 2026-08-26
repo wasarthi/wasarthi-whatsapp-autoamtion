@@ -161,6 +161,7 @@ function loadSectionData(section) {
         case 'chatbot':   loadChatbotRules(); break;
         case 'contacts':  loadContacts(); break;
         case 'scheduled': loadScheduled(); break;
+        case 'appointments': loadAppointments(); break;
         case 'settings':  loadSettings(); break;
     }
 }
@@ -1521,6 +1522,86 @@ async function cancelScheduled(id) {
 }
 
 // ═══════════════════════════════════════════════════════════
+//  APPOINTMENTS
+// ═══════════════════════════════════════════════════════════
+async function loadAppointments() {
+    clearErrorBanner('appointmentsError');
+    try {
+        const { appointments } = await api('/api/appointments');
+        const tbody = document.getElementById('appointmentsBody');
+
+        if (appointments.length === 0) {
+            tbody.innerHTML = `
+                <tr>
+                    <td colspan="5">
+                        <div class="empty-state">
+                            <span class="empty-state-icon" aria-hidden="true">${Icon('calendar-clock')}</span>
+                            <div class="empty-state-title">No appointments yet</div>
+                            <p>Bookings made by your chatbot or added manually below will show up here.</p>
+                        </div>
+                    </td>
+                </tr>`;
+        } else {
+            tbody.innerHTML = appointments.map(a => `
+                <tr>
+                    <td>
+                        <strong>${escapeHtml(a.contact_name || a.phone)}</strong>
+                        ${a.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(a.phone)}</small>` : ''}
+                    </td>
+                    <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(a.start_at)}</td>
+                    <td>${a.source === 'chatbot' ? Icon('bot', 'icon-inline') + ' Chatbot' : Icon('user', 'icon-inline') + ' Manual'}</td>
+                    <td>
+                        <span class="pill pill-${a.status === 'confirmed' ? 'active' : 'error'}">${escapeHtml(a.status)}</span>
+                    </td>
+                    <td>
+                        ${a.status === 'confirmed'
+                            ? `<button class="btn btn-sm btn-danger" onclick="cancelAppointment(${a.id})" aria-label="Cancel appointment" type="button">Cancel</button>`
+                            : '—'}
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        document.getElementById('apptBookingDisabledNotice').style.display = 'none';
+    } catch (err) {
+        showErrorBanner('appointmentsError', 'Failed to load appointments.', loadAppointments);
+    }
+
+    loadApptSlotOptions();
+}
+
+async function cancelAppointment(id) {
+    if (!confirm('Cancel this appointment?')) return;
+    try {
+        await api(`/api/appointments/${id}`, { method: 'DELETE' });
+        showToast('Appointment cancelled', 'success');
+        loadAppointments();
+    } catch (err) {
+        showToast(err.message || 'Failed to cancel appointment', 'error');
+    }
+}
+
+async function loadApptSlotOptions() {
+    const select = document.getElementById('apptSlotSelect');
+    if (!select) return;
+    select.innerHTML = '<option value="">Loading available slots…</option>';
+    try {
+        const { slots, settings } = await api('/api/appointments/slots?daysAhead=14&maxResults=30');
+        if (!settings.bookingEnabled) {
+            const notice = document.getElementById('apptBookingDisabledNotice');
+            if (notice) notice.style.display = '';
+        }
+        if (slots.length === 0) {
+            select.innerHTML = '<option value="">No open slots in the next 14 days</option>';
+            return;
+        }
+        select.innerHTML = slots.map(s => `<option value="${escapeHtml(s.startIso)}">${escapeHtml(s.label)}</option>`).join('');
+    } catch (err) {
+        select.innerHTML = '<option value="">Could not load slots</option>';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════
 //  SETTINGS
 // ═══════════════════════════════════════════════════════════
 async function loadSettings() {
@@ -1551,6 +1632,206 @@ async function loadSettings() {
     } catch (err) {
         showToast('Failed to load settings', 'error');
     }
+
+    loadCalendarStatus();
+    loadBookingSettings();
+}
+
+// ─── Appointment Booking ─────────────────────────────────────
+async function loadBookingSettings() {
+    try {
+        const s = await api('/api/appointments/settings');
+        document.getElementById('bookingEnabled').checked = !!s.bookingEnabled;
+        document.querySelectorAll('.bookingDay').forEach(cb => {
+            cb.checked = s.workingDays.includes(Number(cb.value));
+        });
+        document.getElementById('bookingStartTime').value = s.startTime;
+        document.getElementById('bookingEndTime').value = s.endTime;
+        document.getElementById('bookingSlotDuration').value = String(s.slotDurationMinutes);
+        document.getElementById('bookingBufferMinutes').value = String(s.bufferMinutes);
+
+        const tzSelect = document.getElementById('bookingTimezone');
+        // The dropdown only lists common zones — if the saved value isn't
+        // one of them (set via an older version, or a zone we don't list),
+        // add it so the picker doesn't silently fall back to whatever the
+        // first <option> happens to be and then overwrite a real setting
+        // the next time the form is saved.
+        if (tzSelect && ![...tzSelect.options].some(o => o.value === s.timezone)) {
+            const opt = document.createElement('option');
+            opt.value = s.timezone;
+            opt.textContent = s.timezone;
+            tzSelect.appendChild(opt);
+        }
+        if (tzSelect) tzSelect.value = s.timezone;
+    } catch (err) {
+        showToast('Failed to load booking settings', 'error');
+    }
+}
+
+function initBookingSettings() {
+    const form = document.getElementById('bookingSettingsForm');
+    if (!form) return; // booking tab not on this page
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const workingDays = Array.from(document.querySelectorAll('.bookingDay:checked')).map(cb => Number(cb.value));
+        if (workingDays.length === 0) {
+            showToast('Pick at least one working day', 'error');
+            return;
+        }
+
+        const btn = e.target.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+
+        try {
+            await api('/api/appointments/settings', {
+                method: 'PUT',
+                body: JSON.stringify({
+                    workingDays,
+                    startTime: document.getElementById('bookingStartTime').value,
+                    endTime: document.getElementById('bookingEndTime').value,
+                    slotDurationMinutes: Number(document.getElementById('bookingSlotDuration').value),
+                    bufferMinutes: Number(document.getElementById('bookingBufferMinutes').value),
+                    timezone: document.getElementById('bookingTimezone').value,
+                    bookingEnabled: document.getElementById('bookingEnabled').checked
+                })
+            });
+            showToast('Booking settings saved!', 'success');
+        } catch (err) {
+            showToast(err.message || 'Failed to save booking settings', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save Booking Settings';
+        }
+    });
+
+    // The enable toggle lives outside the form (it reads like a feature
+    // switch, not a form field) but should save immediately like the
+    // calendar's own availability toggle does.
+    document.getElementById('bookingEnabled')?.addEventListener('change', async (e) => {
+        try {
+            const s = await api('/api/appointments/settings');
+            await api('/api/appointments/settings', {
+                method: 'PUT',
+                body: JSON.stringify({ ...s, bookingEnabled: e.target.checked })
+            });
+            showToast(e.target.checked ? 'Chatbot booking enabled' : 'Chatbot booking disabled', 'success');
+        } catch (err) {
+            showToast(err.message || 'Failed to update', 'error');
+            e.target.checked = !e.target.checked;
+        }
+    });
+}
+
+// ─── Google Calendar ────────────────────────────────────────
+async function loadCalendarStatus() {
+    const statusEl = document.getElementById('calendarStatus');
+    const notConfiguredEl = document.getElementById('calendarNotConfigured');
+    const connectBtn = document.getElementById('calendarConnectBtn');
+    const syncBtn = document.getElementById('calendarSyncBtn');
+    const disconnectBtn = document.getElementById('calendarDisconnectBtn');
+    const availabilityRow = document.getElementById('calendarAvailabilityRow');
+    if (!statusEl) return; // calendar tab not on this page
+
+    try {
+        const data = await api('/api/calendar/status');
+        if (!data.configured) {
+            notConfiguredEl.style.display = '';
+            statusEl.innerHTML = '';
+            connectBtn.style.display = 'none';
+            syncBtn.style.display = 'none';
+            disconnectBtn.style.display = 'none';
+            availabilityRow.style.display = 'none';
+            return;
+        }
+        notConfiguredEl.style.display = 'none';
+
+        if (data.connected) {
+            statusEl.innerHTML = `<p class="connected-text">${Icon('check-circle', 'icon-inline')}Connected${data.lastSyncAt ? ` — last synced ${new Date(data.lastSyncAt).toLocaleString()}` : ''}</p>`;
+            connectBtn.style.display = 'none';
+            syncBtn.style.display = '';
+            disconnectBtn.style.display = '';
+            availabilityRow.style.display = '';
+            const cb = document.getElementById('settCalendarCheckAvailability');
+            if (cb) cb.checked = !!data.checkAvailability;
+        } else {
+            statusEl.innerHTML = `<p style="color:var(--color-text-secondary)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+            connectBtn.style.display = '';
+            syncBtn.style.display = 'none';
+            disconnectBtn.style.display = 'none';
+            availabilityRow.style.display = 'none';
+        }
+    } catch (err) {
+        statusEl.innerHTML = '<p style="color:var(--color-error)">Could not load calendar status</p>';
+    }
+}
+
+function initCalendarSettings() {
+    const connectBtn = document.getElementById('calendarConnectBtn');
+    const syncBtn = document.getElementById('calendarSyncBtn');
+    const disconnectBtn = document.getElementById('calendarDisconnectBtn');
+    const availabilityToggle = document.getElementById('settCalendarCheckAvailability');
+    if (!connectBtn) return; // calendar tab not on this page
+
+    connectBtn.addEventListener('click', async () => {
+        try {
+            const data = await api('/api/calendar/connect');
+            // A popup keeps the dashboard tab alive so status can refresh via
+            // postMessage the moment the OAuth flow finishes.
+            window.open(data.url, 'google-calendar-connect', 'width=520,height=680');
+        } catch (err) {
+            showToast(err.message || 'Could not start Google Calendar connection', 'error');
+        }
+    });
+
+    syncBtn.addEventListener('click', async () => {
+        syncBtn.disabled = true;
+        try {
+            const data = await api('/api/calendar/sync', { method: 'POST' });
+            showToast(data.imported > 0 ? `Imported ${data.imported} event(s)` : 'No new calendar events to import', 'success');
+            loadCalendarStatus();
+        } catch (err) {
+            showToast(err.message || 'Sync failed', 'error');
+        } finally {
+            syncBtn.disabled = false;
+        }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+        if (!confirm('Disconnect Google Calendar? Outreach will stop being logged and calendar events will no longer be imported.')) return;
+        try {
+            await api('/api/calendar/disconnect', { method: 'POST' });
+            showToast('Google Calendar disconnected', 'success');
+            loadCalendarStatus();
+        } catch (err) {
+            showToast(err.message || 'Could not disconnect', 'error');
+        }
+    });
+
+    if (availabilityToggle) {
+        availabilityToggle.addEventListener('change', async () => {
+            try {
+                await api('/api/calendar/settings', {
+                    method: 'PUT',
+                    body: JSON.stringify({ checkAvailability: availabilityToggle.checked })
+                });
+                showToast('Saved', 'success');
+            } catch (err) {
+                showToast(err.message || 'Could not save', 'error');
+                availabilityToggle.checked = !availabilityToggle.checked;
+            }
+        });
+    }
+
+    window.addEventListener('message', (event) => {
+        if (event.origin !== window.location.origin) return;
+        if (event.data && event.data.type === 'google-calendar-connected') {
+            if (event.data.ok) showToast('Google Calendar connected', 'success');
+            else showToast(event.data.message || 'Could not connect Google Calendar', 'error');
+            loadCalendarStatus();
+        }
+    });
 }
 
 // ─── QR / SSE ────────────────────────────────────────────────
@@ -1669,6 +1950,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // ── Settings tabs ──────────────────────────────────────
     initSettingsTabs();
+    initCalendarSettings();
+    initBookingSettings();
 
     // ── Navigation ─────────────────────────────────────────
     document.querySelectorAll('.nav-item').forEach(item => {
@@ -2043,6 +2326,42 @@ document.addEventListener('DOMContentLoaded', async () => {
         } finally {
             btn.disabled = false;
             btn.textContent = 'Schedule Message';
+        }
+    });
+
+    // ── Manual appointment booking form ─────────────────────
+    document.getElementById('apptRefreshSlotsBtn')?.addEventListener('click', loadApptSlotOptions);
+
+    document.getElementById('apptBookForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const phone = document.getElementById('apptPhone').value.trim();
+        const contactName = document.getElementById('apptContactName').value.trim();
+        const notes = document.getElementById('apptNotes').value.trim();
+        const startIso = document.getElementById('apptSlotSelect').value;
+
+        if (!phone || !startIso) {
+            showToast('Pick a phone number and an available slot', 'error');
+            return;
+        }
+
+        const btn = e.target.querySelector('[type="submit"]');
+        btn.disabled = true;
+        btn.textContent = 'Booking…';
+
+        try {
+            await api('/api/appointments', {
+                method: 'POST',
+                body: JSON.stringify({ phone, contactName, notes, startIso })
+            });
+            showToast('Appointment booked!', 'success');
+            document.getElementById('apptBookForm').reset();
+            loadAppointments();
+        } catch (err) {
+            showToast(err.message || 'Failed to book appointment', 'error');
+            loadApptSlotOptions();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Book Appointment';
         }
     });
 

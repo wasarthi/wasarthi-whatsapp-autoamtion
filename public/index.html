@@ -58,6 +58,10 @@
             <span class="nav-icon" data-icon="clock" aria-hidden="true"></span>
             <span class="nav-label">Scheduled</span>
         </a>
+        <a href="#" class="nav-item" data-section="appointments" id="nav-appointments" role="menuitem">
+            <span class="nav-icon" data-icon="calendar-clock" aria-hidden="true"></span>
+            <span class="nav-label">Appointments</span>
+        </a>
         <a href="#" class="nav-item" data-section="settings" id="nav-settings" role="menuitem">
             <span class="nav-icon" data-icon="settings" aria-hidden="true"></span>
             <span class="nav-label">Settings</span>
@@ -646,12 +650,11 @@
                 <h2 class="card-title" style="font-size:.95rem">Quick-select for outreach</h2>
                 <div class="quick-select-row">
                     <label for="quickSelectCount" class="sr-only">Number to select</label>
-                    <input type="number" id="quickSelectCount" value="20" min="1" max="300" step="1">
+                    <input type="number" id="quickSelectCount" value="20" min="1" max="25" step="1">
                     <div class="quick-select-presets">
                         <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="10">10</button>
                         <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="20">20</button>
-                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="50">50</button>
-                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="100">100</button>
+                        <button type="button" class="btn btn-sm btn-secondary quick-select-preset" data-n="25">25</button>
                     </div>
                     <button type="button" class="btn btn-sm btn-primary" id="quickSelectBtn">Select next N</button>
                     <label class="quick-select-checkbox">
@@ -750,6 +753,73 @@
         </div>
     </section>
 
+    <!-- ── APPOINTMENTS ── -->
+    <section class="section" id="section-appointments" aria-labelledby="appointments-heading">
+        <div class="page-inner">
+            <div class="section-header">
+                <h1 id="appointments-heading">Appointments</h1>
+                <p class="section-subtitle">Bookings made by your chatbot, plus anything you add manually</p>
+            </div>
+
+            <div id="appointmentsError" style="display:none"></div>
+
+            <div class="card" id="apptBookingDisabledNotice" style="display:none">
+                <p class="card-note"><span data-icon="info" data-icon-class="icon-inline" aria-hidden="true"></span>Appointment booking isn't set up yet. Go to <strong>Settings &rarr; Booking</strong> to set your weekly hours and turn it on.</p>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Book an Appointment</h2>
+                <p class="card-note">Add a booking manually (e.g. a walk-in or phone call) — it uses the same working hours and conflict checks as the chatbot.</p>
+                <form id="apptBookForm" novalidate>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="apptPhone">Phone Number</label>
+                            <input type="tel" id="apptPhone" placeholder="e.g. 919876543210" required autocomplete="tel">
+                        </div>
+                        <div class="form-group">
+                            <label for="apptContactName">Contact Name (optional)</label>
+                            <input type="text" id="apptContactName" placeholder="e.g. Priya Sharma">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="apptSlotSelect">Available Slot</label>
+                        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                            <select id="apptSlotSelect" style="flex:1;min-width:220px">
+                                <option value="">Loading available slots…</option>
+                            </select>
+                            <button class="btn btn-secondary btn-sm" id="apptRefreshSlotsBtn" type="button">Refresh</button>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="apptNotes">Notes (optional)</label>
+                        <textarea id="apptNotes" rows="2" placeholder="What's this appointment for?"></textarea>
+                    </div>
+                    <button type="submit" class="btn btn-primary">Book Appointment</button>
+                </form>
+            </div>
+
+            <div class="card">
+                <h2 class="card-title">Upcoming &amp; Past Appointments</h2>
+                <div class="table-container">
+                    <table class="data-table" aria-label="Appointments list">
+                        <thead>
+                            <tr>
+                                <th scope="col">Contact</th>
+                                <th scope="col">Date &amp; Time</th>
+                                <th scope="col">Booked Via</th>
+                                <th scope="col">Status</th>
+                                <th scope="col"><span class="sr-only">Actions</span></th>
+                            </tr>
+                        </thead>
+                        <tbody id="appointmentsBody">
+                            <tr><td colspan="5" class="empty-state">No appointments yet</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- ── SETTINGS ── -->
     <section class="section" id="section-settings" aria-labelledby="settings-heading">
         <div class="page-inner">
@@ -772,6 +842,8 @@
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-business"    id="tab-business"    data-tab="business"    type="button">Business Setup</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-ai"          id="tab-ai"          data-tab="ai"          type="button">AI Behavior</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-qr"          id="tab-qr"          data-tab="qr"          type="button">WhatsApp QR</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-booking"     id="tab-booking"     data-tab="booking"     type="button">Booking</button>
+                <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-calendar"    id="tab-calendar"    data-tab="calendar"    type="button">Calendar</button>
                 <button class="settings-tab"        role="tab" aria-selected="false" aria-controls="stab-danger"      id="tab-danger"      data-tab="danger"      type="button">Danger Zone</button>
             </div>
 
@@ -963,6 +1035,111 @@
                         <div class="qr-success" id="qrSuccess" style="display:none;">
                             <span data-icon="check-circle" data-icon-class="icon-inline" aria-hidden="true"></span>WhatsApp is Connected!
                         </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── Tab: Booking ── -->
+            <div class="settings-panel" id="stab-booking" role="tabpanel" aria-labelledby="tab-booking">
+                <div class="card">
+                    <h2 class="card-title"><span data-icon="calendar-clock" data-icon-class="icon-inline" aria-hidden="true"></span>Appointment Booking</h2>
+                    <p class="card-note">Set your weekly working hours so customers can book real appointments right from WhatsApp. The chatbot checks these hours (and your Google Calendar, if connected) before offering or confirming any slot.</p>
+
+                    <div class="toggle-group">
+                        <span>Let the chatbot check availability and book appointments in chat</span>
+                        <label class="toggle" aria-label="Enable chatbot appointment booking">
+                            <input type="checkbox" id="bookingEnabled">
+                            <span class="toggle-slider"></span>
+                        </label>
+                    </div>
+
+                    <form id="bookingSettingsForm" novalidate style="margin-top:16px">
+                        <div class="form-group">
+                            <label>Working Days</label>
+<div id="bookingWorkingDays" style="display:flex;gap:8px;flex-wrap:wrap">
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="1" class="bookingDay" style="margin:0"> Mon</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="2" class="bookingDay" style="margin:0"> Tue</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="3" class="bookingDay" style="margin:0"> Wed</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="4" class="bookingDay" style="margin:0"> Thu</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="5" class="bookingDay" style="margin:0"> Fri</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="6" class="bookingDay" style="margin:0"> Sat</label>
+                                <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border:1px solid var(--color-border);border-radius:20px;font-size:0.85rem;color:var(--color-text-secondary);cursor:pointer"><input type="checkbox" value="0" class="bookingDay" style="margin:0"> Sun</label>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="bookingStartTime">Opens At</label>
+                                <input type="time" id="bookingStartTime" required>
+                            </div>
+                            <div class="form-group">
+                                <label for="bookingEndTime">Closes At</label>
+                                <input type="time" id="bookingEndTime" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="bookingSlotDuration">Appointment Length</label>
+                                <select id="bookingSlotDuration">
+                                    <option value="15">15 minutes</option>
+                                    <option value="30">30 minutes</option>
+                                    <option value="45">45 minutes</option>
+                                    <option value="60">60 minutes</option>
+                                    <option value="90">90 minutes</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="bookingBufferMinutes">Buffer Between Appointments</label>
+                                <select id="bookingBufferMinutes">
+                                    <option value="0">No buffer</option>
+                                    <option value="5">5 minutes</option>
+                                    <option value="10">10 minutes</option>
+                                    <option value="15">15 minutes</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="bookingTimezone">Timezone</label>
+                            <select id="bookingTimezone">
+                                <option value="Asia/Kolkata">India (Asia/Kolkata)</option>
+                                <option value="Asia/Dubai">Dubai (Asia/Dubai)</option>
+                                <option value="Asia/Dhaka">Dhaka (Asia/Dhaka)</option>
+                                <option value="Asia/Karachi">Karachi (Asia/Karachi)</option>
+                                <option value="Asia/Singapore">Singapore (Asia/Singapore)</option>
+                                <option value="Europe/London">London (Europe/London)</option>
+                                <option value="America/New_York">New York (America/New_York)</option>
+                                <option value="America/Los_Angeles">Los Angeles (America/Los_Angeles)</option>
+                                <option value="UTC">UTC</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Save Booking Settings</button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- ── Tab: Calendar ── -->
+            <div class="settings-panel" id="stab-calendar" role="tabpanel" aria-labelledby="tab-calendar">
+                <div class="card">
+                    <h2 class="card-title"><span data-icon="calendar-clock" data-icon-class="icon-inline" aria-hidden="true"></span>Google Calendar</h2>
+                    <p class="card-note">Connect your Google Calendar to log every outreach send as an event, schedule WhatsApp messages by creating an event titled <code>WhatsApp: &lt;phone number&gt;</code> with the message in the description, and optionally skip sends while your calendar shows you're busy.</p>
+                    <div id="calendarNotConfigured" style="display:none">
+                        <p style="color:var(--color-text-secondary)">Google Calendar isn't set up on this server yet. An administrator needs to add <code>GOOGLE_CALENDAR_CLIENT_ID</code>, <code>GOOGLE_CALENDAR_CLIENT_SECRET</code> and <code>GOOGLE_CALENDAR_REDIRECT_URI</code> to the server's environment.</p>
+                    </div>
+                    <div id="calendarStatus" aria-live="polite">
+                        <p>Checking connection…</p>
+                    </div>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">
+                        <button class="btn btn-primary" id="calendarConnectBtn" type="button" style="display:none">
+                            <span class="btn-icon" data-icon="calendar-clock" aria-hidden="true"></span> Connect Google Calendar
+                        </button>
+                        <button class="btn btn-secondary" id="calendarSyncBtn" type="button" style="display:none">Sync Now</button>
+                        <button class="btn btn-secondary" id="calendarDisconnectBtn" type="button" style="display:none">Disconnect</button>
+                    </div>
+                    <div class="toggle-group" id="calendarAvailabilityRow" style="display:none;margin-top:16px">
+                        <span>Skip outreach sends while I'm busy on my calendar</span>
+                        <label class="toggle" aria-label="Check calendar availability before sending">
+                            <input type="checkbox" id="settCalendarCheckAvailability">
+                            <span class="toggle-slider"></span>
+                        </label>
                     </div>
                 </div>
             </div>

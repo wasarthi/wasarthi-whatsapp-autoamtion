@@ -12,6 +12,10 @@
 services:
   app:
     ports: []   # override the base file's "3000:3000" — only Caddy is public now
+    deploy:
+      resources:
+        limits:
+          memory: 2G  # Cap memory so Chromium sessions don't OOM the host
 
   caddy:
     image: caddy:2-alpine

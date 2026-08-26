@@ -76,6 +76,7 @@ describe('Multi-tenant isolation', () => {
         await freshDatabase();
         app = createTestApp();
         admin = await signup(app, { email: 'admin@iso.test' });
+        require('../src/services/database').updateUser(admin.user.id, { role: 'admin' });
         alice = await signup(app, { email: 'alice@iso.test' });
         bob   = await signup(app, { email: 'bob@iso.test' });
         alice.data = await seed(alice, { name: 'alice', phone: '911111111111' });

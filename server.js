@@ -21,6 +21,7 @@ require('dotenv').config();
 const { createApp } = require('./src/config/app');
 const { initDatabase, forcePersist, getPersistHealth, listUsers } = require('./src/services/database');
 const { initScheduler, stopScheduler, isSchedulerBusy } = require('./src/services/scheduler');
+const { initCalendarSync, stopCalendarSync } = require('./src/services/calendar-sync');
 const { initWhatsAppClient, destroyAllClients } = require('./src/services/whatsapp-client');
 const { cancelAllOutreachJobs } = require('./src/services/outreach');
 const { clearPendingAutoAnalyses } = require('./src/services/lead-analyzer');
@@ -33,6 +34,8 @@ const SHUTDOWN_GRACE_MS = parseInt(process.env.SHUTDOWN_GRACE_MS, 10) || 15000;
 let httpServer = null;
 let shuttingDown = false;
 
+const { assertPersistRootWritable } = require('./src/config/paths');
+
 // ─── Startup configuration checks ─────────────────────────────
 /**
  * Refuses to start a production process that is misconfigured in a way that
@@ -44,6 +47,7 @@ let shuttingDown = false;
  * cookies without Secure. A refused boot is noticed immediately.
  */
 function validateEnvironment() {
+    assertPersistRootWritable();
     const problems = [];
     const warnings = [];
     const isProd = process.env.NODE_ENV === 'production';
@@ -127,6 +131,7 @@ async function shutdown(signal) {
     }
 
     stopScheduler();
+    stopCalendarSync();
     const cancelled = cancelAllOutreachJobs();
     if (cancelled) console.log(`   ✔ Requested cancellation of ${cancelled} outreach job(s)`);
     clearPendingAutoAnalyses();
@@ -233,6 +238,12 @@ async function start() {
         console.log('✅ Scheduler initialized');
     } catch (schedErr) {
         console.error('⚠️ Scheduler init failed (non-fatal):', schedErr.message);
+    }
+
+    try {
+        initCalendarSync();
+    } catch (calErr) {
+        console.error('⚠️ Calendar sync init failed (non-fatal):', calErr.message);
     }
 
     await new Promise((resolve, reject) => {

@@ -14,11 +14,14 @@ const express = require('express');
 const cors    = require('cors');
 const path    = require('path');
 const fs      = require('fs');
+const compression = require('compression');
 const { nonceMiddleware } = require('../middleware/nonce');
 const { requestLogger } = require('../utils/logger');
 const apiRoutes                     = require('../routes/api');
 const authRoutes                    = require('../routes/auth');
 const adminRoutes                   = require('../routes/admin');
+const calendarRoutes                = require('../routes/calendar');
+const appointmentRoutes             = require('../routes/appointments');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { errorHandler }              = require('../utils/errors');
 const { addSSEClient, getSessionMetrics } = require('../services/whatsapp-client');
@@ -58,6 +61,19 @@ function createApp() {
     }
 
     app.use(requestMetrics);
+
+    // ─── Response compression ────────────────────────────────────
+    // The dashboard bundle (app.js, chart.umd.min.js) and every JSON API
+    // response benefit from this — chart.umd.min.js alone is ~200KB
+    // uncompressed. Explicitly skips the QR/status SSE stream: compression
+    // buffers output to fill its chunk size before flushing, which would
+    // turn a real-time "here's your QR code" push into a delayed one.
+    app.use(compression({
+        filter: (req, res) => {
+            if (req.path === '/api/qr-stream') return false;
+            return compression.filter(req, res);
+        }
+    }));
 
     // ─── CORS ───────────────────────────────────────────────────
     // This app serves its own frontend from the same origin as the API, so
@@ -104,6 +120,7 @@ function createApp() {
           res.setHeader('Content-Security-Policy', [
               "default-src 'self'",
               `script-src 'self' 'nonce-${nonce}'`,
+              "script-src-attr 'none'",
               `style-src 'self' 'nonce-${nonce}'`,
               "img-src 'self' data:",       // data: is required: QR codes are data URLs
               "connect-src 'self'",
@@ -192,6 +209,14 @@ app.get('/health', (req, res) => {
     // authenticated account, so there is nothing for a client to tamper with
     // in order to read another tenant's QR code.
     app.get('/api/qr-stream', requireAuth, (req, res) => addSSEClient(req.user.id, req, res));
+
+    // ─── Google Calendar (requires login; the OAuth callback is a normal
+    //     top-level browser navigation back to our own origin, so the
+    //     session cookie is present there too) ─────────────────────
+    app.use('/api/calendar', requireAuth, calendarRoutes);
+
+    // ─── Appointment booking (weekly hours, slot lookup, bookings) ──
+    app.use('/api/appointments', requireAuth, appointmentRoutes);
 
     // ─── Everything else under /api requires a logged-in account ──
     app.use('/api', requireAuth, apiRoutes);

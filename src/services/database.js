@@ -1,21 +1,15 @@
 const initSqlJs = require('sql.js');
-const path = require('path');
 const fs = require('fs');
 
-// Ensure data directory exists.
-// PERSIST_ROOT lets a deploy host that only gives you ONE persistent disk at
-// ONE mount path (Render is the case this exists for) put every stateful
-// folder — this one, plus .wwebjs_auth/.wwebjs_cache in whatsapp-client.js —
-// under that single path. Unset (the default, e.g. Docker Compose on a VPS,
-// which already mounts three separate named volumes), this resolves to
-// exactly what it always has: <project root>/data.
-const persistRoot = process.env.PERSIST_ROOT || path.join(__dirname, '..');
-const dataDir = path.join(persistRoot, 'data');
-if (!fs.existsSync(dataDir)) {
-    fs.mkdirSync(dataDir, { recursive: true });
-}
+// All persistence paths come from one canonical module so every component
+// agrees on the same root — the inconsistency between modules was the root
+// cause of sessions disappearing after restart when PERSIST_ROOT was unset.
+const { DATA_DIR, DB_PATH: dbPath } = require('../config/paths');
 
-const dbPath = path.join(dataDir, 'whatsapp.db');
+// Ensure data directory exists.
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
 let db;
 // Set once the database has been deliberately closed. Guards against a
 // debounced timer resurrecting a stale in-memory image after the file (or the
@@ -262,6 +256,78 @@ function prepareLegacyRename(name) {
  * on first boot.
  */
 const MIGRATIONS = [
+    // ── v6: calendar event tenant isolation ───────────────────────────────
+    // The old schema had `event_id TEXT PRIMARY KEY` — a global uniqueness
+    // constraint across all tenants. Google Calendar event IDs are unique
+    // per calendar, not globally, so two tenants could share an ID and one
+    // would silently lose their calendar import. This rebuilds the table
+    // with PRIMARY KEY(user_id, event_id) and copies existing rows.
+    {
+        version: 6,
+        name: 'google_calendar_synced_events: composite PK (user_id, event_id)',
+        up: () => {
+            const sql = queryGet(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='google_calendar_synced_events'"
+            );
+            // If the table doesn't exist yet or already has the correct schema, skip.
+            if (!sql || /PRIMARY KEY\s*\(user_id,\s*event_id\)/i.test(sql.sql)) return;
+            db.run('ALTER TABLE google_calendar_synced_events RENAME TO google_calendar_synced_events_pre_v6');
+            db.run(`
+                CREATE TABLE google_calendar_synced_events (
+                    user_id INTEGER NOT NULL,
+                    event_id TEXT NOT NULL,
+                    scheduled_message_id INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY(user_id, event_id)
+                )
+            `);
+            db.run(`
+                INSERT OR IGNORE INTO google_calendar_synced_events
+                    (user_id, event_id, scheduled_message_id, created_at)
+                SELECT user_id, event_id, scheduled_message_id, created_at
+                FROM google_calendar_synced_events_pre_v6
+            `);
+            db.run('DROP TABLE google_calendar_synced_events_pre_v6');
+        }
+    },
+    // ── v7: scheduled_messages.status allows 'unknown' ────────────────────
+    // A Promise.race timeout on sendTextMessage does NOT cancel the
+    // underlying operation. The message may still be delivered after the
+    // timeout. Marking it 'failed' is misleading and enables duplicate
+    // sends if the operator retries. 'unknown' means "sent but delivery
+    // not confirmed" — the correct state for a transport timeout.
+    {
+        version: 7,
+        name: "scheduled_messages.status allows 'unknown'",
+        up: () => {
+            const sql = queryGet(
+                "SELECT sql FROM sqlite_master WHERE type='table' AND name='scheduled_messages'"
+            );
+            if (!sql || /'unknown'/.test(sql.sql)) return;
+            db.run('ALTER TABLE scheduled_messages RENAME TO scheduled_messages_pre_v7');
+            db.run(`
+                CREATE TABLE scheduled_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    phone TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    scheduled_at DATETIME NOT NULL,
+                    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'sending', 'sent', 'failed', 'cancelled', 'unknown')),
+                    error_message TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    sent_at DATETIME
+                )
+            `);
+            db.run(`
+                INSERT INTO scheduled_messages
+                    (id, user_id, phone, body, scheduled_at, status, error_message, created_at, sent_at)
+                SELECT id, user_id, phone, body, scheduled_at, status, error_message, created_at, sent_at
+                FROM scheduled_messages_pre_v7
+            `);
+            db.run('DROP TABLE scheduled_messages_pre_v7');
+        }
+    },
+    // ── v1–v5: original migrations ────────────────────────────────────────
     {
         version: 1,
         name: 'contacts.last_outreach_at',
@@ -312,11 +378,6 @@ const MIGRATIONS = [
         version: 3,
         name: 'normalize scheduled_at to SQLite-comparable UTC',
         up: () => {
-            // Rows written before validation existed may hold ISO strings
-            // with a 'T' and/or a 'Z'. Every due-check is a *string*
-            // comparison against datetime('now') ("YYYY-MM-DD HH:MM:SS"),
-            // so 'T'-separated values sort after any real timestamp and
-            // those jobs would never fire. Rewrite them in place.
             db.run(`
                 UPDATE scheduled_messages
                    SET scheduled_at = replace(replace(scheduled_at, 'T', ' '), 'Z', '')
@@ -328,12 +389,6 @@ const MIGRATIONS = [
         version: 4,
         name: 'strip WhatsApp JID suffixes from stored phone numbers',
         up: () => {
-            // Before phone validation, a client could store "1234@g.us" or
-            // "…@c.us" as a contact/message/deal phone. Those values break
-            // the (user_id, phone) joins between messages, contacts,
-            // crm_deals and lead_analysis, because the same person appears
-            // under two spellings. Normalise to digits-only, matching what
-            // validate.normalizePhone now guarantees for new writes.
             for (const table of ['contacts', 'messages', 'crm_deals', 'crm_activities', 'lead_analysis', 'scheduled_messages']) {
                 if (!tableExists(table)) continue;
                 db.run(`
@@ -348,17 +403,6 @@ const MIGRATIONS = [
         version: 5,
         name: 'unique index for outgoing-message idempotency keys',
         up: () => {
-            // Makes logOutgoingMessageIdempotent actually atomic: two
-            // concurrent retries of the same send both try to INSERT and
-            // exactly one survives.
-            //
-            // Deliberately a *partial* index over 'idem:%' keys only, not
-            // over wa_message_id generally. A plain unique index would also
-            // constrain real WhatsApp message ids, and if any historical
-            // duplicate exists there (the same id logged twice by an older
-            // code path) creating the index would fail and block startup —
-            // punishing an upgrade for old data rather than preventing the
-            // bug we actually care about.
             db.run(`
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_idempotency
                 ON messages(user_id, wa_message_id)
@@ -675,6 +719,91 @@ async function initDatabase() {
         )
     `);
 
+    // ── Google Calendar integration ─────────────────────────────
+    // One row per connected account. Tokens are stored as-is (this project
+    // has no field-level encryption layer for the SQLite file already, same
+    // as the WhatsApp session cookie secret and Gemini key stored in
+    // `settings`) — protecting them is the job of protecting data/whatsapp.db
+    // itself (filesystem permissions, backups) rather than the app layer.
+    // New table, so a plain CREATE TABLE IF NOT EXISTS is enough for both a
+    // fresh install and an upgrade — no ALTER-based migration needed.
+    db.run(`
+        CREATE TABLE IF NOT EXISTS google_calendar_accounts (
+            user_id INTEGER PRIMARY KEY,
+            access_token TEXT NOT NULL,
+            refresh_token TEXT,
+            scope TEXT,
+            token_type TEXT,
+            expiry_date INTEGER,
+            calendar_id TEXT DEFAULT 'primary',
+            check_availability INTEGER DEFAULT 0,
+            connected_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            last_sync_at DATETIME
+        )
+    `);
+
+    // Records which Google Calendar events have already been turned into a
+    // scheduled_messages row, so a sync tick that runs every few minutes
+    // over a rolling look-ahead window doesn't re-import the same event
+    // twice as the same event keeps showing up in each poll.
+    //
+    // IMPORTANT: PRIMARY KEY is (user_id, event_id), NOT event_id alone.
+    // Google Calendar event IDs are unique per-calendar, not globally —
+    // two tenants sharing an event ID is not hypothetical (Google reuses
+    // short IDs). An event_id-only PK causes one tenant's mark to be seen
+    // by another tenant as already synced, silently preventing their event
+    // from firing. Migration v6 rebuilds this table if it has the old schema.
+    db.run(`
+        CREATE TABLE IF NOT EXISTS google_calendar_synced_events (
+            user_id INTEGER NOT NULL,
+            event_id TEXT NOT NULL,
+            scheduled_message_id INTEGER,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY(user_id, event_id)
+        )
+    `);
+
+    // ── Appointment booking ─────────────────────────────────────
+    // One row per account: the weekly working-hours template the "book an
+    // appointment" chatbot flow (and the dashboard's own manual-booking
+    // form) generates candidate slots from. A missing row means "use the
+    // built-in defaults" (see services/availability.js) rather than
+    // "booking is broken" — a fresh account should be bookable immediately.
+    db.run(`
+        CREATE TABLE IF NOT EXISTS availability_settings (
+            user_id INTEGER PRIMARY KEY,
+            working_days TEXT NOT NULL DEFAULT '1,2,3,4,5',
+            start_time TEXT NOT NULL DEFAULT '09:00',
+            end_time TEXT NOT NULL DEFAULT '18:00',
+            slot_duration_minutes INTEGER NOT NULL DEFAULT 30,
+            buffer_minutes INTEGER NOT NULL DEFAULT 0,
+            timezone TEXT NOT NULL DEFAULT 'Asia/Kolkata',
+            booking_enabled INTEGER NOT NULL DEFAULT 0,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    // Every booked appointment, whether made by the chatbot on a customer's
+    // behalf or by the owner from the dashboard. This is the source of
+    // truth for "is this slot free" even when Google Calendar isn't
+    // connected — the calendar sync (calendar_event_id) is a best-effort
+    // mirror on top, never a dependency.
+    db.run(`
+        CREATE TABLE IF NOT EXISTS appointments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            phone TEXT NOT NULL,
+            contact_name TEXT DEFAULT '',
+            start_at DATETIME NOT NULL,
+            end_at DATETIME NOT NULL,
+            status TEXT NOT NULL DEFAULT 'confirmed' CHECK(status IN ('confirmed', 'cancelled')),
+            source TEXT NOT NULL DEFAULT 'chatbot' CHECK(source IN ('chatbot', 'dashboard')),
+            notes TEXT DEFAULT '',
+            calendar_event_id TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
     // ── Copy legacy rows into the fresh tables (user_id = 1) ────
     const legacyCopyColumns = {
         contacts: ['phone', 'name', 'label', 'notes', 'created_at', 'updated_at'],
@@ -728,6 +857,14 @@ async function initDatabase() {
     db.run("CREATE INDEX IF NOT EXISTS idx_products_user ON products(user_id)");
     db.run("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)");
     db.run("CREATE INDEX IF NOT EXISTS idx_users_status ON users(status)");
+    db.run("CREATE INDEX IF NOT EXISTS idx_appointments_user_start ON appointments(user_id, start_at)");
+    db.run("CREATE INDEX IF NOT EXISTS idx_appointments_user_status ON appointments(user_id, status)");
+
+    // Provision the bootstrap admin on every boot. Idempotent: if the
+    // account already exists and already has role='admin', this is a no-op.
+    // Must be called after all migrations have run so the users table is
+    // guaranteed to exist with the current schema.
+    ensureBootstrapAdmin();
 
     forcePersist();
     return db;
@@ -783,31 +920,20 @@ function countUsers() {
 }
 
 /**
- * Creates an account, assigning the very first one the admin role.
- *
- * Two details that matter:
- *
- * 1. countUsers() and the INSERT happen with no `await` between them.
- *    Node runs this synchronously, and sql.js is a single in-process
- *    database, so two concurrent signups cannot both observe an empty
- *    users table — whichever request reaches this function first commits
- *    before the second one counts. (The route's separate
- *    "does this email exist" check happens *before* an await on bcrypt,
- *    which is why the UNIQUE index below is the real defence.)
- *
- * 2. The whole thing is one transaction with ensureDefaultSettings, so a
- *    failure while writing defaults can't leave an account that has no
- *    settings rows — the state where the chatbot silently does nothing
- *    because getSetting('chatbot_enabled') returns null.
+ * Creates a new account. Role is always 'user' regardless of how many
+ * accounts exist — the old "first signup becomes admin" behaviour was a
+ * security vulnerability: any database reset allowed an attacker who signed
+ * up first to claim admin access. Admin promotion is now exclusively via
+ * ensureBootstrapAdmin() (BOOTSTRAP_ADMIN_EMAIL env var, called on boot)
+ * or via the admin panel (an existing admin promoting another account).
  */
 function createUser({ email, passwordHash, businessName = '', ownerName = '' }) {
     const normalizedEmail = String(email).trim().toLowerCase();
     return transaction(() => {
-        const isFirstUser = countUsers() === 0;
         db.run(
             `INSERT INTO users (email, password_hash, business_name, owner_name, role, status, plan)
-             VALUES (?, ?, ?, ?, ?, 'active', 'free')`,
-            [normalizedEmail, passwordHash, businessName, ownerName, isFirstUser ? 'admin' : 'user']
+             VALUES (?, ?, ?, ?, 'user', 'active', 'free')`,
+            [normalizedEmail, passwordHash, businessName, ownerName]
         );
         const lastId = db.exec('SELECT last_insert_rowid()')[0]?.values[0][0] || 0;
         for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
@@ -815,6 +941,56 @@ function createUser({ email, passwordHash, businessName = '', ownerName = '' }) 
         }
         return getUserById(lastId);
     });
+}
+
+/**
+ * Promotes or creates the designated bootstrap admin account.
+ *
+ * Called once from initDatabase() — never from a signup route.
+ *
+ * If BOOTSTRAP_ADMIN_EMAIL is set:
+ *   - If that account already exists with role 'admin', do nothing.
+ *   - If that account exists with role 'user', promote it. This handles the
+ *     case where an admin re-deploys and the existing account needs to be
+ *     elevated back, without wiping data.
+ *   - If the account does not exist, create it with a random placeholder
+ *     password and role 'admin'. The operator must change the password
+ *     via the change-password API or by setting a known hash directly.
+ *
+ * The env var is checked at boot so its value is the source of truth
+ * rather than whatever state the database happens to be in.
+ */
+function ensureBootstrapAdmin() {
+    const bootstrapEmail = (process.env.BOOTSTRAP_ADMIN_EMAIL || '').trim().toLowerCase();
+    if (!bootstrapEmail) return; // not configured — nothing to do
+
+    const existing = getUserByEmail(bootstrapEmail);
+    if (existing) {
+        if (existing.role !== 'admin') {
+            runSql('UPDATE users SET role = \'admin\' WHERE id = ?', [existing.id]);
+            console.log(`[bootstrap] Promoted ${bootstrapEmail} to admin (id=${existing.id}).`);
+        }
+        return;
+    }
+
+    // Account doesn't exist yet — create it with an unusable placeholder
+    // password (60 random bytes, never a valid bcrypt hash). The operator
+    // must set a real password before the account is useful.
+    const { randomBytes } = require('crypto');
+    const placeholder = '$bootstrap$' + randomBytes(30).toString('hex');
+    transaction(() => {
+        db.run(
+            `INSERT INTO users (email, password_hash, business_name, owner_name, role, status, plan)
+             VALUES (?, ?, 'Admin', 'Admin', 'admin', 'active', 'free')`,
+            [bootstrapEmail, placeholder]
+        );
+        const lastId = db.exec('SELECT last_insert_rowid()')[0]?.values[0][0] || 0;
+        for (const [key, value] of Object.entries(DEFAULT_SETTINGS)) {
+            db.run('INSERT OR IGNORE INTO settings (user_id, key, value) VALUES (?, ?, ?)', [lastId, key, value]);
+        }
+    });
+    console.log(`[bootstrap] Created admin account for ${bootstrapEmail}. ` +
+        `Set a password via the change-password API or by updating the password_hash directly.`);
 }
 
 /** True if an error from createUser is the UNIQUE(email) collision (→ HTTP 409, not 500). */
@@ -858,7 +1034,15 @@ function updateUser(id, fields) {
  * All-or-nothing is the only correct behaviour here.
  */
 function deleteUserCascade(id) {
-    const tables = ['contacts', 'messages', 'chatbot_rules', 'scheduled_messages', 'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis'];
+    // IMPORTANT: google_calendar_accounts and google_calendar_synced_events
+    // MUST be included — they hold OAuth access/refresh tokens. Omitting
+    // them means deleting a user leaves their Google credentials in the DB.
+    const tables = [
+        'contacts', 'messages', 'chatbot_rules', 'scheduled_messages',
+        'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis',
+        'appointments', 'availability_settings',
+        'google_calendar_synced_events', 'google_calendar_accounts'
+    ];
     return transaction(() => {
         for (const t of tables) {
             db.run(`DELETE FROM ${t} WHERE user_id = ?`, [id]);
@@ -870,7 +1054,12 @@ function deleteUserCascade(id) {
 
 /** Rows still referencing a user id — used by tests to prove no orphans remain. */
 function countOrphanedRows(userId) {
-    const tables = ['contacts', 'messages', 'chatbot_rules', 'scheduled_messages', 'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis'];
+    const tables = [
+        'contacts', 'messages', 'chatbot_rules', 'scheduled_messages',
+        'settings', 'products', 'crm_deals', 'crm_activities', 'lead_analysis',
+        'appointments', 'availability_settings',
+        'google_calendar_synced_events', 'google_calendar_accounts'
+    ];
     let total = 0;
     const byTable = {};
     for (const t of tables) {
@@ -1704,6 +1893,184 @@ function getAllSettings(userId) {
     return settings;
 }
 
+// ─── Google Calendar Helpers ────────────────────────────────
+/** Upserts the connected account's tokens. Called on initial connect and again whenever the OAuth client refreshes an access token. */
+function saveGoogleCalendarTokens(userId, tokens) {
+    const existing = queryGet('SELECT calendar_id, check_availability FROM google_calendar_accounts WHERE user_id = ?', [userId]);
+    return runSql(
+        `INSERT INTO google_calendar_accounts (user_id, access_token, refresh_token, scope, token_type, expiry_date, calendar_id, check_availability)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(user_id) DO UPDATE SET
+            access_token = excluded.access_token,
+            -- A token refresh response from Google usually omits refresh_token
+            -- (it's only issued once, on first consent). Falling back to the
+            -- stored value instead of overwriting with NULL is what keeps
+            -- refreshes working after the first one.
+            refresh_token = COALESCE(excluded.refresh_token, google_calendar_accounts.refresh_token),
+            scope = excluded.scope,
+            token_type = excluded.token_type,
+            expiry_date = excluded.expiry_date`,
+        [
+            userId, tokens.access_token, tokens.refresh_token || null, tokens.scope || null,
+            tokens.token_type || null, tokens.expiry_date || null,
+            existing ? existing.calendar_id : 'primary',
+            existing ? existing.check_availability : 0
+        ]
+    );
+}
+
+function getGoogleCalendarAccount(userId) {
+    return queryGet('SELECT * FROM google_calendar_accounts WHERE user_id = ?', [userId]);
+}
+
+function getAllConnectedCalendarUserIds() {
+    return queryAll('SELECT user_id FROM google_calendar_accounts').map(r => r.user_id);
+}
+
+function deleteGoogleCalendarAccount(userId) {
+    runSql('DELETE FROM google_calendar_synced_events WHERE user_id = ?', [userId]);
+    return runSql('DELETE FROM google_calendar_accounts WHERE user_id = ?', [userId]);
+}
+
+function setCalendarAvailabilityCheck(userId, enabled) {
+    return runSql('UPDATE google_calendar_accounts SET check_availability = ? WHERE user_id = ?', [enabled ? 1 : 0, userId]);
+}
+
+function touchCalendarLastSync(userId) {
+    return runSql('UPDATE google_calendar_accounts SET last_sync_at = CURRENT_TIMESTAMP WHERE user_id = ?', [userId]);
+}
+
+/**
+ * True if this (userId, eventId) pair has already been turned into a
+ * scheduled message. userId is REQUIRED — without it a match in tenant A
+ * would block tenant B from importing their own event with the same ID.
+ * Google event IDs are only unique per calendar, not globally.
+ */
+function isCalendarEventSynced(userId, eventId) {
+    return !!queryGet(
+        'SELECT 1 FROM google_calendar_synced_events WHERE user_id = ? AND event_id = ?',
+        [userId, eventId]
+    );
+}
+
+/** Records that a calendar event has been turned into a scheduled message, so the next sync tick skips it. */
+function markCalendarEventSynced(eventId, userId, scheduledMessageId) {
+    return runSql(
+        'INSERT OR IGNORE INTO google_calendar_synced_events (user_id, event_id, scheduled_message_id) VALUES (?, ?, ?)',
+        [userId, eventId, scheduledMessageId]
+    );
+}
+
+// ─── Appointment booking ────────────────────────────────────
+/** Returns the raw stored row, or null if the account has never saved custom hours (caller applies defaults — see availability.js). */
+function getAvailabilitySettings(userId) {
+    return queryGet('SELECT * FROM availability_settings WHERE user_id = ?', [userId]);
+}
+
+function saveAvailabilitySettings(userId, { workingDays, startTime, endTime, slotDurationMinutes, bufferMinutes, timezone, bookingEnabled }) {
+    return runSql(
+        `INSERT INTO availability_settings (user_id, working_days, start_time, end_time, slot_duration_minutes, buffer_minutes, timezone, booking_enabled, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+         ON CONFLICT(user_id) DO UPDATE SET
+            working_days = excluded.working_days,
+            start_time = excluded.start_time,
+            end_time = excluded.end_time,
+            slot_duration_minutes = excluded.slot_duration_minutes,
+            buffer_minutes = excluded.buffer_minutes,
+            timezone = excluded.timezone,
+            booking_enabled = excluded.booking_enabled,
+            updated_at = CURRENT_TIMESTAMP`,
+        [userId, workingDays, startTime, endTime, slotDurationMinutes, bufferMinutes, timezone, bookingEnabled ? 1 : 0]
+    );
+}
+
+/**
+ * Appointments overlapping [startAt, endAt) for this user, excluding
+ * cancelled ones — the check every booking (chatbot or dashboard) must pass
+ * before it's allowed to claim a slot.
+ */
+function countOverlappingAppointments(userId, startAt, endAt, excludeId = null) {
+    let sql = `SELECT COUNT(*) as count FROM appointments
+               WHERE user_id = ? AND status = 'confirmed' AND start_at < ? AND end_at > ?`;
+    const params = [userId, endAt, startAt];
+    if (excludeId) {
+        sql += ' AND id != ?';
+        params.push(excludeId);
+    }
+    return queryGet(sql, params).count;
+}
+
+function listAppointments(userId, { status = null, fromAt = null, toAt = null, limit = 500 } = {}) {
+    let sql = 'SELECT * FROM appointments WHERE user_id = ?';
+    const params = [userId];
+    if (status) {
+        sql += ' AND status = ?';
+        params.push(status);
+    }
+    if (fromAt) {
+        sql += ' AND end_at >= ?';
+        params.push(fromAt);
+    }
+    if (toAt) {
+        sql += ' AND start_at <= ?';
+        params.push(toAt);
+    }
+    sql += ' ORDER BY start_at ASC LIMIT ?';
+    params.push(limit);
+    return queryAll(sql, params);
+}
+
+function countAppointments(userId) {
+    return queryGet("SELECT COUNT(*) as count FROM appointments WHERE user_id = ? AND status = 'confirmed'", [userId]).count;
+}
+
+/**
+ * Atomically checks for an overlap and inserts, inside one transaction —
+ * returns the new row, or null if something else claimed an overlapping
+ * slot first.
+ *
+ * This is the actual race guard, not countOverlappingAppointments on its
+ * own. availability.bookAppointment does its own pre-checks (including an
+ * async Google Calendar lookup) before calling this, purely to fail fast
+ * and avoid creating a calendar event for a slot that's obviously already
+ * taken — but those checks happen before `await`s, which yield the event
+ * loop, so two concurrent bookings for the same slot could both sail past
+ * them. This function's check-then-insert never yields (sql.js is
+ * synchronous, and `transaction()` wraps both statements in one BEGIN/COMMIT
+ * with no `await` in between) — a second caller's INSERT literally cannot
+ * run until this one's transaction has committed, so it will see the first
+ * booking's row and correctly self-reject.
+ */
+function createAppointment(userId, { phone, contactName = '', startAt, endAt, source = 'chatbot', notes = '', calendarEventId = null }) {
+    return transaction(() => {
+        const conflict = queryGet(
+            `SELECT COUNT(*) as count FROM appointments
+             WHERE user_id = ? AND status = 'confirmed' AND start_at < ? AND end_at > ?`,
+            [userId, endAt, startAt]
+        ).count;
+        if (conflict > 0) return null;
+
+        const { lastId } = runSql(
+            `INSERT INTO appointments (user_id, phone, contact_name, start_at, end_at, source, notes, calendar_event_id)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [userId, phone, contactName, startAt, endAt, source, notes, calendarEventId]
+        );
+        return queryGet('SELECT * FROM appointments WHERE id = ?', [lastId]);
+    });
+}
+
+function getAppointmentById(userId, id) {
+    return queryGet('SELECT * FROM appointments WHERE id = ? AND user_id = ?', [id, userId]);
+}
+
+/** Marks an appointment cancelled. Returns the row as it was *before* cancelling (so the caller can still clean up its calendar event), or null if it didn't exist / already was. */
+function cancelAppointment(userId, id) {
+    const row = queryGet("SELECT * FROM appointments WHERE id = ? AND user_id = ? AND status = 'confirmed'", [id, userId]);
+    if (!row) return null;
+    runSql("UPDATE appointments SET status = 'cancelled' WHERE id = ? AND user_id = ?", [id, userId]);
+    return row;
+}
+
 // ─── Dashboard Stats ────────────────────────────────────────
 function getDashboardStats(userId) {
     const totalMessages   = queryGet('SELECT COUNT(*) as count FROM messages WHERE user_id = ?', [userId]).count;
@@ -1755,6 +2122,7 @@ module.exports = {
     getUserById,
     countUsers,
     createUser,
+    ensureBootstrapAdmin,
     isDuplicateEmailError,
     touchLastLogin,
     listUsers,
@@ -1823,7 +2191,25 @@ module.exports = {
     getCrmAnalytics,
     addCrmActivity,
     getCrmActivities,
-    forcePersist
+    forcePersist,
+    // Google Calendar
+    saveGoogleCalendarTokens,
+    getGoogleCalendarAccount,
+    getAllConnectedCalendarUserIds,
+    deleteGoogleCalendarAccount,
+    setCalendarAvailabilityCheck,
+    touchCalendarLastSync,
+    isCalendarEventSynced,
+    markCalendarEventSynced,
+    // Appointment booking
+    getAvailabilitySettings,
+    saveAvailabilitySettings,
+    countOverlappingAppointments,
+    listAppointments,
+    countAppointments,
+    createAppointment,
+    getAppointmentById,
+    cancelAppointment
 };
 
 

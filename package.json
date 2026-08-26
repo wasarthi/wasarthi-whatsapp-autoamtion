@@ -24,10 +24,12 @@
     "@google/genai": "^2.16.0",
     "axios": "^1.7.0",
     "bcryptjs": "^2.4.3",
+    "compression": "^1.8.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.0",
     "express": "^4.21.0",
-    "node-cron": "^3.0.3",
+    "googleapis": "^176.0.0",
+    "node-cron": "^4.6.0",
     "qrcode": "^1.5.3",
     "sql.js": "^1.11.0",
     "whatsapp-web.js": "^1.23.0"

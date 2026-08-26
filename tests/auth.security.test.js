@@ -20,9 +20,9 @@ describe('Authentication & session security', () => {
 
     // ─────────────────────────────────────────────────────────
     describe('Signup', () => {
-        test('creates the first account as admin, the second as a normal user', async () => {
+        test('creates all accounts as user, never automatically assigning admin', async () => {
             const first = await signup(app, { email: 'first@example.com' });
-            expect(first.user.role).toBe('admin');
+            expect(first.user.role).toBe('user'); // B1 fix: no automatic admin
 
             const second = await signup(app, { email: 'second@example.com' });
             expect(second.user.role).toBe('user');
@@ -479,6 +479,8 @@ describe('Authentication & session security', () => {
 
         test('deletion takes effect on an existing session', async () => {
             const admin = await signup(app, { email: 'admin@test.com' });
+            require('../src/services/database').updateUser(admin.user.id, { role: 'admin' });
+
             const victim = await signup(app, { email: 'victim2@test.com' });
 
             await request(app).get('/api/auth/me').set('Cookie', victim.cookie).expect(200);

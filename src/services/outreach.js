@@ -32,8 +32,9 @@ const {
     markContactOutreached, getUserById
 } = require('./database');
 const { tryNormalizePhone } = require('../utils/validate');
+const { checkAvailabilityNow, logOutreachEvent } = require('./google-calendar');
 
-const MAX_RECIPIENTS_PER_JOB = 300;
+const MAX_RECIPIENTS_PER_JOB = 25;
 const MIN_DELAY_MS = 3000;
 const MAX_DELAY_MS = 9000;
 // One running job per account. Two concurrent jobs would double the
@@ -159,6 +160,24 @@ async function runJob(job, user, contacts, messageTemplate) {
             break;
         }
 
+        // Optional per-user setting (routes/calendar.js): skip this contact
+        // rather than send while the owner's own Google Calendar shows them
+        // busy right now. checkAvailabilityNow fails open (busy: false) on
+        // any error or if the feature isn't connected, so a Calendar API
+        // hiccup can never silently stall a whole outreach job.
+        const availability = await checkAvailabilityNow(fresh.id);
+        if (availability.busy) {
+            job.results.push({
+                phone: contact.phone, name: contact.name,
+                status: 'skipped', reason: 'Skipped — your Google Calendar shows you as busy right now'
+            });
+            job.skipped++;
+            if (contact !== contacts[contacts.length - 1]) {
+                await new Promise(resolve => setTimeout(resolve, randomDelay()));
+            }
+            continue;
+        }
+
         // The contact rows come from our own database, but they may predate
         // phone validation (see migration 4), so normalise rather than trust.
         const phone = tryNormalizePhone(contact.phone);
@@ -184,6 +203,10 @@ async function runJob(job, user, contacts, messageTemplate) {
             markContactOutreached(fresh.id, phone);
             job.sent++;
             job.results.push({ phone, name: contact.name, status: 'sent' });
+            // Best-effort, deliberately not awaited before continuing: this
+            // is a courtesy record, not something the send itself should
+            // wait on, and logOutreachEvent already swallows its own errors.
+            logOutreachEvent(fresh.id, { phone, name: contact.name, message: personalized });
         } catch (err) {
             job.failed++;
             // Don't echo raw internals into a response body the browser shows.
