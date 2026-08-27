@@ -16,8 +16,13 @@ const sessions = new Map(); // userId -> session state object
 // process, measured at roughly 150-250MB RSS each. Since signup is open
 // (no email verification/CAPTCHA), a cap keeps a burst of new accounts from
 // exhausting server memory/CPU. Raise via env var on a bigger box.
+//
+// The default is deliberately conservative (5) so that a small VPS (2GB RAM)
+// survives out of the box. 5 sessions × ~250MB = ~1.25GB, leaving headroom
+// for Node itself, the OS, and Caddy. Set MAX_CONCURRENT_WHATSAPP_SESSIONS
+// higher on a box with more RAM (rough guide: (total_RAM_GB - 1) × 3).
 const rawCap = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10);
-const MAX_CONCURRENT_SESSIONS = (Number.isFinite(rawCap) && rawCap >= 30) ? rawCap : 30;
+const MAX_CONCURRENT_SESSIONS = (Number.isFinite(rawCap) && rawCap >= 1) ? rawCap : 5;
 
 // SSE connections are long-lived: each holds a socket, a file descriptor and
 // a heartbeat timer for as long as the browser stays open. Without a cap, one

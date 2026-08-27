@@ -27,6 +27,11 @@ services:
       - .env
     environment:
       - NODE_ENV=production
+      # Each WhatsApp session spawns a Chromium process (~150-250MB each).
+      # With a 2GB memory limit, 3 sessions use ~750MB leaving headroom for
+      # Node, the OS, and Caddy. Raise this if you upgrade to a bigger VPS.
+      - MAX_CONCURRENT_WHATSAPP_SESSIONS=3
+      - FORCE_HTTPS=true
     ports:
       - "3000:3000"
     volumes:

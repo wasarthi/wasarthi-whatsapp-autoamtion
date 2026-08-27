@@ -270,6 +270,18 @@ async function start() {
     console.log('╚══════════════════════════════════════════════╝');
     console.log('');
 
+    // ─── Capacity diagnostics ─────────────────────────────────
+    // Log memory and session cap so OOM crashes are diagnosable from logs.
+    const os = require('os');
+    const totalMemMB = Math.round(os.totalmem() / 1024 / 1024);
+    const freeMemMB = Math.round(os.freemem() / 1024 / 1024);
+    const maxWaSessions = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10) || 5;
+    const estimatedPeakMB = maxWaSessions * 250 + 500; // 250MB per Chrome + 500MB for Node/OS
+    console.log(`📊 System: ${totalMemMB}MB total, ${freeMemMB}MB free | WA session cap: ${maxWaSessions} (est. peak ~${estimatedPeakMB}MB)`);
+    if (estimatedPeakMB > totalMemMB * 0.85) {
+        console.warn(`⚠️  WARNING: ${maxWaSessions} WhatsApp sessions could use ~${estimatedPeakMB}MB, which exceeds 85% of available memory (${totalMemMB}MB). Risk of OOM kill! Lower MAX_CONCURRENT_WHATSAPP_SESSIONS or add more RAM.`);
+    }
+
     if (!getPersistHealth().ok) {
         console.error('❌ The database could not be written on startup — the service will refuse writes until this is fixed.');
     }
