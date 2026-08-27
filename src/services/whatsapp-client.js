@@ -303,47 +303,31 @@ function initWhatsAppClient(userId) {
             // web.whatsapp.com only when nothing cached matches — no GitHub
             // dependency, no stale pin.
             webVersionCache: {
-                type: 'local',
-                path: CACHE_ROOT
+                type: 'none'
             },
             puppeteer: {
                 headless: 'new',
-                // In Docker/Cloud, PUPPETEER_EXECUTABLE_PATH points to the
-                // apt-installed Chromium (see Dockerfile ENV). Without this,
-                // puppeteer looks for its own bundled Chrome which was skipped
-                // via PUPPETEER_SKIP_DOWNLOAD — and QR generation silently
-                // fails because client.initialize() throws before any QR
-                // event fires.
                 ...(process.env.PUPPETEER_EXECUTABLE_PATH
                     ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
-                    : {}),
+                    : (fs.existsSync('/usr/bin/chromium')
+                        ? { executablePath: '/usr/bin/chromium' }
+                        : (fs.existsSync('/usr/bin/chromium-browser') ? { executablePath: '/usr/bin/chromium-browser' } : {}))),
                 args: [
-                    // --no-sandbox is required because this runs as a
-                    // non-root user inside a container without the kernel
-                    // capabilities Chrome's sandbox needs. The mitigation is
-                    // that the container itself is the boundary: non-root
-                    // user, dropped capabilities, read-only where possible
-                    // (see Dockerfile). Rendering attacker-controlled web
-                    // content unsandboxed is a real residual risk and is
-                    // listed as such in the readiness report.
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
-                    '--no-zygote',
                     '--disable-gpu',
-                    // Each renderer costs memory; this account only needs one page.
-                    '--renderer-process-limit=1',
-                    '--disable-extensions',
-                    '--disable-background-networking'
+                    '--disable-extensions'
                 ]
             }
         });
     } catch (err) {
-        console.error(`❌ [user ${userId}] Failed to create WhatsApp client:`, err.message);
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`❌ [user ${userId}] Failed to create WhatsApp client:`, msg);
         s.isInitializing = false;
-        s.lastError = 'Could not start the WhatsApp browser session.';
+        s.lastError = `Failed to create client: ${msg.split('\n')[0]}`;
         scheduleRestart(userId, 10000);
         return { accepted: true, starting: false };
     }
@@ -353,9 +337,10 @@ function initWhatsAppClient(userId) {
 
     console.log(`⏳ [user ${userId}] Initializing WhatsApp Web client...`);
     client.initialize().catch(err => {
-        console.error(`❌ [user ${userId}] client.initialize() error:`, err.message?.split('\n')[0]);
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`❌ [user ${userId}] client.initialize() error:`, msg);
         s.isInitializing = false;
-        s.lastError = 'WhatsApp failed to start.';
+        s.lastError = `WhatsApp launch error: ${msg.split('\n')[0]}`;
         scheduleRestart(userId, 12000);
     });
 
