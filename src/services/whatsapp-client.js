@@ -90,19 +90,23 @@ function getSession(userId, createIfMissing = true) {
 // ─── Stale lock-file cleanup ──────────────────────────────────
 // If Chrome crashes it leaves a SingletonLock file that blocks the next launch.
 function clearStaleLocks(userId) {
-    const authDir   = authDataPath(userId);
-    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket'];
+    const authDir = authDataPath(userId);
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'];
     try {
         if (!fs.existsSync(authDir)) return;
-        const sessionDirs = fs.readdirSync(authDir);
-        for (const sess of sessionDirs) {
-            for (const lockFile of lockFiles) {
-                const p = path.join(authDir, sess, lockFile);
-                if (fs.existsSync(p)) {
-                    fs.rmSync(p, { force: true });
+        const cleanRecursive = (dir) => {
+            try {
+                for (const item of fs.readdirSync(dir)) {
+                    const p = path.join(dir, item);
+                    try {
+                        const st = fs.statSync(p);
+                        if (st.isDirectory()) cleanRecursive(p);
+                        else if (lockFiles.includes(item)) fs.rmSync(p, { force: true });
+                    } catch (_) {}
                 }
-            }
-        }
+            } catch (_) {}
+        };
+        cleanRecursive(authDir);
     } catch (e) {
         // Auth dir may not exist yet on first run — that's fine
     }
