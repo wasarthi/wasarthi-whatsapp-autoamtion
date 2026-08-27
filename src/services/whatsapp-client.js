@@ -16,7 +16,8 @@ const sessions = new Map(); // userId -> session state object
 // process, measured at roughly 150-250MB RSS each. Since signup is open
 // (no email verification/CAPTCHA), a cap keeps a burst of new accounts from
 // exhausting server memory/CPU. Raise via env var on a bigger box.
-const MAX_CONCURRENT_SESSIONS = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10) || 30;
+const rawCap = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10);
+const MAX_CONCURRENT_SESSIONS = (Number.isFinite(rawCap) && rawCap >= 30) ? rawCap : 30;
 
 // SSE connections are long-lived: each holds a socket, a file descriptor and
 // a heartbeat timer for as long as the browser stays open. Without a cap, one
