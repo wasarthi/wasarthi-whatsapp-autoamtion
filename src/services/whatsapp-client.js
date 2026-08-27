@@ -23,7 +23,7 @@ const MAX_CONCURRENT_SESSIONS = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SES
 // account opening tabs in a loop exhausts file descriptors for the whole
 // process — which takes down the API for every tenant, not just theirs.
 const MAX_SSE_CLIENTS_PER_USER = parseInt(process.env.MAX_SSE_CLIENTS_PER_USER, 10) || 5;
-const MAX_SSE_CLIENTS_TOTAL = parseInt(process.env.MAX_SSE_CLIENTS_TOTAL, 10) || 500;
+const MAX_SSE_CLIENTS_TOTAL = parseInt(process.env.MAX_SSE_CLIENTS_TOTAL, 10) || 250;
 
 // WhatsApp session auth folders live under AUTH_ROOT, which is part of
 // PERSIST_ROOT (see src/config/paths.js). This keeps sessions on the same
@@ -163,6 +163,11 @@ async function safeDestroyClient(s) {
         ]);
     } catch (e) {
         console.warn('⚠️ client.destroy() warning (non-fatal):', e.message?.split('\n')[0]);
+        try {
+            if (c.pupBrowser && typeof c.pupBrowser.close === 'function') {
+                await c.pupBrowser.close().catch(() => {});
+            }
+        } catch (_) {}
     }
 }
 
@@ -464,7 +469,7 @@ function attachHandlers(userId, s, client) {
 
             await Promise.race([
                 processMessage(userId, phone, msg.body, contactName, client, msg),
-                new Promise((_, rej) => setTimeout(() => rej(new Error('processMessage timeout after 45s')), 45000))
+                new Promise((_, rej) => setTimeout(() => rej(new Error('processMessage timeout after 90s')), 90000))
             ]);
         } catch (error) {
             // Swallowed on purpose, and only here: an inbound message handler

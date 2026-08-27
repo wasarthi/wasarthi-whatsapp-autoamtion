@@ -34,14 +34,12 @@ const {
 const { tryNormalizePhone } = require('../utils/validate');
 const { checkAvailabilityNow, logOutreachEvent } = require('./google-calendar');
 
-const MAX_RECIPIENTS_PER_JOB = 25;
+const MAX_RECIPIENTS_PER_JOB = parseInt(process.env.MAX_OUTREACH_RECIPIENTS_PER_JOB, 10) || 25;
 const MIN_DELAY_MS = 3000;
 const MAX_DELAY_MS = 9000;
-// One running job per account. Two concurrent jobs would double the
-// effective send rate, defeating the throttle that exists to keep the
-// number from being banned — and the second job's delays would interleave
-// with the first's, producing bursts.
-const MAX_CONCURRENT_JOBS_PER_USER = 1;
+// Global and per-user limits for concurrent outreach jobs across the platform.
+const MAX_CONCURRENT_OUTREACH_JOBS = parseInt(process.env.MAX_CONCURRENT_OUTREACH_JOBS, 10) || 5;
+const MAX_CONCURRENT_JOBS_PER_USER = parseInt(process.env.MAX_CONCURRENT_OUTREACH_PER_USER, 10) || 1;
 // Finished jobs are kept only long enough for the UI to read the final
 // result, then dropped. Without this the map grows for the life of the
 // process — a slow leak proportional to how much the feature is used.
@@ -76,6 +74,14 @@ function countRunningJobsForUser(userId) {
     return n;
 }
 
+function countTotalRunningJobs() {
+    let n = 0;
+    for (const job of jobs.values()) {
+        if (job.status === 'running') n++;
+    }
+    return n;
+}
+
 /**
  * Starts a bulk-send job for one user against a list of contacts. Returns
  * the job immediately (status 'running', nothing sent yet) — the actual
@@ -86,6 +92,11 @@ function startOutreachJob(user, contacts, messageTemplate) {
     if (contacts.length > MAX_RECIPIENTS_PER_JOB) {
         const err = new Error(`Outreach is capped at ${MAX_RECIPIENTS_PER_JOB} recipients per send — you selected ${contacts.length}. Split into smaller batches.`);
         err.status = 400;
+        throw err;
+    }
+    if (countTotalRunningJobs() >= MAX_CONCURRENT_OUTREACH_JOBS) {
+        const err = new Error('The server is currently at capacity for concurrent outreach campaigns. Please wait a few moments.');
+        err.status = 503;
         throw err;
     }
     if (countRunningJobsForUser(user.id) >= MAX_CONCURRENT_JOBS_PER_USER) {

@@ -78,7 +78,9 @@ const aiLimiter = perUser('ai', {
  * can exhaust the process's outbound sockets and the platform's API quota,
  * which is a financial denial-of-service against every other customer.
  */
-const aiGate = concurrencyGate({ maxGlobal: 8, maxPerUser: 2 });
+const MAX_CONCURRENT_AI_JOBS = parseInt(process.env.MAX_CONCURRENT_AI_JOBS, 10) || 8;
+const MAX_CONCURRENT_AI_PER_USER = parseInt(process.env.MAX_CONCURRENT_AI_PER_USER, 10) || 2;
+const aiGate = concurrencyGate({ maxGlobal: MAX_CONCURRENT_AI_JOBS, maxPerUser: MAX_CONCURRENT_AI_PER_USER });
 
 function withAiSlot(handler) {
     return asyncHandler(async (req, res, next) => {

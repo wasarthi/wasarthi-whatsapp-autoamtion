@@ -275,6 +275,8 @@ module.exports = {
     isRetryableError,
     isFatalKeyError,
     isCircuitOpen,
+    recordFailure,
+    recordSuccess,
     resetCircuits,
     GEMINI_TIMEOUT_MS,
     MAX_RETRIES,

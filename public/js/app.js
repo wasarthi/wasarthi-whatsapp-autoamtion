@@ -255,7 +255,8 @@ async function loadDashboard() {
 function animateValue(elementId, target) {
     const el = document.getElementById(elementId);
     if (!el) return;
-    const start = parseInt(el.textContent) || 0;
+    const safeTarget = Number.isFinite(target) ? target : (parseInt(target, 10) || 0);
+    const start = parseInt(el.textContent, 10) || 0;
     const duration = 600;
     const startTime = performance.now();
 
@@ -263,7 +264,7 @@ function animateValue(elementId, target) {
         const elapsed = currentTime - startTime;
         const progress = Math.min(elapsed / duration, 1);
         const eased = 1 - Math.pow(1 - progress, 3);
-        el.textContent = Math.round(start + (target - start) * eased);
+        el.textContent = Math.round(start + (safeTarget - start) * eased);
         if (progress < 1) requestAnimationFrame(update);
     }
 
@@ -558,10 +559,13 @@ function renderCrmCharts(a) {
 
     // ── 1. Donut: open deals by stage (ordinal green ramp) ──
     const donutEl = document.getElementById('chartStageDeals');
+    const legendDealsEl = document.getElementById('legendStageDeals');
     if (donutEl) {
         if (stageCounts.every(c => c === 0)) {
-            donutEl.closest('.chart-flex').innerHTML = '<p class="chart-empty">No open deals yet — analyzed sales chats will appear here.</p>';
+            donutEl.style.display = 'none';
+            if (legendDealsEl) legendDealsEl.innerHTML = '<p class="chart-empty">No open deals yet — analyzed sales chats will appear here.</p>';
         } else {
+            donutEl.style.display = '';
             crmCharts.stageDeals = new Chart(donutEl, {
                 type: 'doughnut',
                 data: {
@@ -627,13 +631,16 @@ function renderCrmCharts(a) {
 
     // ── 3. Donut: lead interest mix ──
     const intEl = document.getElementById('chartInterest');
+    const legendIntEl = document.getElementById('legendInterest');
     if (intEl) {
         const mixMap = {};
         (a.interestMix || []).forEach(r => { mixMap[r.interest_status] = r.count; });
         const items = INTEREST_ORDER.map(i => ({ ...i, value: mixMap[i.key] || 0 }));
         if (items.every(i => i.value === 0)) {
-            intEl.closest('.chart-flex').innerHTML = '<p class="chart-empty">No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.</p>';
+            intEl.style.display = 'none';
+            if (legendIntEl) legendIntEl.innerHTML = '<p class="chart-empty">No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.</p>';
         } else {
+            intEl.style.display = '';
             crmCharts.interest = new Chart(intEl, {
                 type: 'doughnut',
                 data: {

@@ -128,7 +128,7 @@ function renderUsers() {
                 </td>
                 <td>${rolePill}</td>
                 <td>${statusPill}</td>
-                <td><span class="wa-dot ${wa.connected ? 'connected' : ''}">${waLabel}</span></td>
+                <td><span class="wa-dot ${wa.connected ? 'connected' : ''}">${escapeHtml(waLabel)}</span></td>
                 <td>
                     <div style="font-size:.8rem;line-height:1.5">
                         <div>${s.messagesThisMonth || 0} msgs this month</div>

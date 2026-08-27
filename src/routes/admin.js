@@ -26,7 +26,7 @@ router.get('/users', (req, res) => {
     const users = listUsers().map(u => {
         const stats = getUserStats(u.id);
         const wa = getStatus(u.id);
-        return { ...u, stats, whatsapp: wa };
+        return { ...publicUser(u), stats, whatsapp: wa };
     });
     res.json({ success: true, data: users });
 });

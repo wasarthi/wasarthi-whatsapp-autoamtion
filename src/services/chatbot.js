@@ -5,6 +5,7 @@ const {
 const { generateReply } = require('./ai');
 const { scheduleAutoAnalysis } = require('./lead-analyzer');
 const { safeRegexTest } = require('../utils/validate');
+const { conversationQueue } = require('../utils/conversation-queue');
 
 // ─── Anti-Ban Rate Limiting ─────────────────────────────────
 const userRateLimits = new Map();
@@ -121,8 +122,14 @@ async function safeReply(client, phone, responseText, msg) {
     }
 }
 
-// ─── Process an incoming message through chatbot rules ──────
-async function processMessage(userId, phone, messageText, contactName = '', client = null, msg = null) {
+// ─── Process an incoming message through chatbot rules (serialized) ──────
+function processMessage(userId, phone, messageText, contactName = '', client = null, msg = null) {
+    return conversationQueue.enqueue(userId, phone, () =>
+        _processMessageInternal(userId, phone, messageText, contactName, client, msg)
+    );
+}
+
+async function _processMessageInternal(userId, phone, messageText, contactName = '', client = null, msg = null) {
     // Log without the message body: this runs for every inbound message, and
     // customer message content in stdout ends up in any log aggregator,
     // container log, or terminal scrollback. Phone is partially masked for
