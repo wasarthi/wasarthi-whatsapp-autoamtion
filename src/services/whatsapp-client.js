@@ -33,7 +33,11 @@ let totalSseClients = 0;
 
 function countActiveSessions() {
     let n = 0;
+    const now = Date.now();
     for (const s of sessions.values()) {
+        if (s.isInitializing && s.startedAt && (now - s.startedAt > 45000)) {
+            s.isInitializing = false;
+        }
         if (s.client || s.isInitializing) n++;
     }
     return n;
@@ -248,7 +252,15 @@ function initWhatsAppClient(userId) {
     s.userDisconnected = false;
 
     if (s.isInitializing) {
-        return { accepted: true, alreadyStarting: true };
+        if (s.startedAt && Date.now() - s.startedAt > 45000) {
+            s.isInitializing = false;
+            safeDestroyClient(s);
+        } else {
+            if (s.currentQR) {
+                broadcastSSE(userId, { type: 'qr', data: s.currentQR });
+            }
+            return { accepted: true, alreadyStarting: true };
+        }
     }
     if (s.isConnected && s.client) {
         return { accepted: true, alreadyConnected: true };
