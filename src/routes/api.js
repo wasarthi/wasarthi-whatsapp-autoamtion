@@ -162,9 +162,9 @@ router.get('/status', (req, res) => {
 // idempotent inside the client module, but the limiter stops a script from
 // hammering connect/disconnect and thrashing browser processes.
 const waConnectLimiter = perUser('wa-connect', {
-    windowMs: 5 * 60 * 1000,
-    max: 10,
-    message: 'Too many WhatsApp connection attempts. Wait a few minutes before retrying.'
+    windowMs: 60 * 1000,
+    max: 30,
+    message: 'Too many WhatsApp connection attempts. Wait a moment before retrying.'
 });
 
 router.post('/whatsapp/connect', waConnectLimiter, (req, res) => {

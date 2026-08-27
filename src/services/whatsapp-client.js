@@ -276,6 +276,7 @@ function initWhatsAppClient(userId) {
     s.isInitializing = true;
     s.startedAt = Date.now();
     s.lastError = null;
+    s.crashCount = 0;
     clearTimers(s);
 
     console.log(`🔧 [user ${userId}] Starting WhatsApp Web client...`);
@@ -515,6 +516,8 @@ async function destroyClientForUser(userId) {
     s.isConnected = false;
     s.isInitializing = false;
     s.currentQR = null;
+    s.crashCount = 0;
+    s.lastError = null;
 
     broadcastSSE(userId, { type: 'disconnected' });
 
