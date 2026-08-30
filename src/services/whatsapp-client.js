@@ -41,7 +41,7 @@ function countActiveSessions() {
     let n = 0;
     const now = Date.now();
     for (const s of sessions.values()) {
-        if (s.isInitializing && s.startedAt && (now - s.startedAt > 45000)) {
+        if (s.isInitializing && s.startedAt && (now - s.startedAt > 300000)) {
             s.isInitializing = false;
         }
         if (s.client || s.isInitializing) n++;
@@ -262,7 +262,7 @@ function initWhatsAppClient(userId) {
     s.userDisconnected = false;
 
     if (s.isInitializing) {
-        if (s.startedAt && Date.now() - s.startedAt > 45000) {
+        if (s.startedAt && Date.now() - s.startedAt > 300000) {
             s.isInitializing = false;
             safeDestroyClient(s);
         } else {
@@ -316,6 +316,7 @@ function initWhatsAppClient(userId) {
             },
             puppeteer: {
                 headless: 'new',
+                protocolTimeout: 300000,
                 ...(process.env.PUPPETEER_EXECUTABLE_PATH
                     ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
                     : (fs.existsSync('/usr/bin/chromium')
