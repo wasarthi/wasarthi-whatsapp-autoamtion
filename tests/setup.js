@@ -15,6 +15,24 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 
+// ─── Scrub production-only env vars before any module load ──────────────────
+//
+// These must be deleted BEFORE require('dotenv') runs anywhere in the
+// require chain. If BOOTSTRAP_ADMIN_EMAIL is set in the developer's .env,
+// it leaks through dotenv.config() (called in src/config/app.js at module
+// level) and ensureBootstrapAdmin() creates an admin in every "fresh"
+// database — causing the countUsers() === 0 assertion in freshDatabase() to
+// throw and making 100+ tests fail with misleading isolation errors.
+delete process.env.BOOTSTRAP_ADMIN_EMAIL;
+delete process.env.GOOGLE_CALENDAR_CLIENT_ID;
+delete process.env.GOOGLE_CALENDAR_CLIENT_SECRET;
+delete process.env.GOOGLE_CALENDAR_REDIRECT_URI;
+// Prevent dotenv from loading the developer's real .env during tests.
+// src/config/app.js guards dotenv.config() behind NODE_ENV !== 'test',
+// but we also block it here as defence-in-depth in case any new module
+// calls dotenv.config() at require time.
+process.env.NODE_ENV = 'test';
+
 // A unique directory per worker so `jest --maxWorkers` doesn't have two
 // processes fighting over one SQLite file.
 const TEST_ROOT = path.join(
@@ -22,7 +40,7 @@ const TEST_ROOT = path.join(
     `wa-tests-${process.pid}-${process.env.JEST_WORKER_ID || '1'}`
 );
 
-process.env.NODE_ENV = 'test';
+// NODE_ENV = 'test' is already set above; this line is intentionally removed.
 process.env.PERSIST_ROOT = TEST_ROOT;
 // Deterministic and long enough to satisfy the production-length check.
 process.env.SESSION_SECRET = 'test-session-secret-' + 'x'.repeat(88);
@@ -96,15 +114,39 @@ async function freshDatabase() {
     // database handle, the auth secret and its secret-file path, rate-limit
     // buckets, session registries. Without this, suite N sees suite N-1's
     // users regardless of where the file lives.
+    // These paths must exactly match the real file locations — a wrong path
+    // silently fails (caught below) and leaves the previous test's module
+    // state in place. Run `node -e "require.resolve('<path>')"` from the
+    // tests/ directory to verify each one.
     for (const mod of [
-        '../src/database', '../src/auth', '../src/validate',
-        '../src/middleware/auth', '../src/middleware/rateLimit', '../src/middleware/errors',
-        '../src/routes/auth', '../src/routes/api', '../src/routes/admin',
-        '../src/whatsapp-client', '../src/chatbot', '../src/scheduler',
-        '../src/outreach', '../src/lead-analyzer', '../src/business',
-        '../src/ai', '../src/gemini-client', '../src/metrics', '../src/config/app'
+        '../src/services/database',
+        '../src/config/auth',
+        '../src/utils/validate',
+        '../src/middleware/auth',
+        '../src/middleware/rateLimit',
+        '../src/utils/errors',
+        '../src/routes/auth',
+        '../src/routes/api',
+        '../src/routes/admin',
+        '../src/routes/calendar',
+        '../src/routes/appointments',
+        '../src/services/whatsapp-client',
+        '../src/services/chatbot',
+        '../src/services/scheduler',
+        '../src/services/outreach',
+        '../src/services/lead-analyzer',
+        '../src/services/business',
+        '../src/services/ai',
+        '../src/services/gemini-client',
+        '../src/services/calendar-sync',
+        '../src/services/google-calendar',
+        '../src/utils/metrics',
+        '../src/utils/conversation-queue',
+        '../src/utils/logger',
+        '../src/config/app',
+        '../src/config/paths'
     ]) {
-        try { delete require.cache[require.resolve(mod)]; } catch (e) { /* not loaded yet */ }
+        try { delete require.cache[require.resolve(mod)]; } catch (_) { /* not loaded yet — safe to ignore */ }
     }
 
     const db = require('../src/services/database');

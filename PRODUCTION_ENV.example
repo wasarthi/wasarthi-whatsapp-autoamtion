@@ -1,0 +1,106 @@
+# PRODUCTION_ENV.example
+# ============================================================
+# Copy this file to .env on your EC2 server.
+# NEVER commit .env to git — it contains secrets.
+# This file is safe to commit; it contains no real values.
+#
+# Quick setup:
+#   cp PRODUCTION_ENV.example .env
+#   nano .env   # fill in the values marked <- REQUIRED
+# ============================================================
+
+# --- Core Server ----------------------------------------------
+PORT=3000
+NODE_ENV=production
+
+# --- Session Secret <-  REQUIRED ----------------------------
+# Signs every login session cookie. A guessable value = any
+# attacker can forge a cookie for any account, including admin.
+# Generate: node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"
+SESSION_SECRET=CHANGE_ME_64_CHAR_RANDOM_HEX_STRING_HERE
+
+# --- Bootstrap Admin <- SET ONCE THEN OPTIONALLY REMOVE -----
+# On first boot this email is promoted to admin (or created if
+# it doesn't exist). After promoting the account, you can leave
+# it set (idempotent) or remove it.
+# WARNING: Do NOT set this in your local dev .env -- it causes
+# ~100 test failures by leaking into the test database.
+BOOTSTRAP_ADMIN_EMAIL=admin@yourdomain.com
+
+# --- Gemini AI <- REQUIRED for AI features ------------------
+# https://aistudio.google.com/app/apikey
+GEMINI_API_KEY=
+
+# --- Demo Mode ----------------------------------------------
+# false = real WhatsApp sessions (production default)
+# true  = mock data, no WhatsApp needed (demos/staging only)
+DEMO_MODE=false
+
+# --- Reverse Proxy & TLS ------------------------------------
+# Both MUST be true when running behind Caddy (production default).
+# Setting TRUST_PROXY=true with no proxy lets attackers spoof IP
+# and bypass rate limiting. Only enable when Caddy is in front.
+TRUST_PROXY=true
+FORCE_HTTPS=true
+
+# --- CORS ---------------------------------------------------
+# Your production domain(s), comma-separated.
+ALLOWED_ORIGINS=https://ai4automation.in
+
+# --- WhatsApp / Chromium Capacity ---------------------------
+# Each session = one Chromium process approx 200-300MB RSS.
+# With SESSION_IDLE_TIMEOUT_MS, idle sessions hibernate -- peak
+# concurrent Chrome count is much lower than total user count.
+#
+# Sizing (leave 1.5GB for OS + Caddy + Node baseline):
+#   t3.medium  4GB  -> set  7
+#   t3.large   8GB  -> set 19   <- recommended for 30 users
+#   t3.xlarge 16GB  -> set 43
+MAX_CONCURRENT_WHATSAPP_SESSIONS=19
+
+# Hibernate idle Chrome sessions after N ms of inactivity.
+# Reconnects automatically -- no QR re-scan needed.
+SESSION_IDLE_TIMEOUT_MS=7200000
+
+# --- AI Concurrency -----------------------------------------
+MAX_CONCURRENT_AI_JOBS=8
+MAX_CONCURRENT_AI_PER_USER=2
+GEMINI_TIMEOUT_MS=30000
+
+# --- Outreach Campaigns -------------------------------------
+MAX_CONCURRENT_OUTREACH_JOBS=5
+MAX_CONCURRENT_OUTREACH_PER_USER=1
+MAX_OUTREACH_RECIPIENTS_PER_JOB=25
+
+# --- Server-Sent Events (SSE) -------------------------------
+MAX_SSE_CLIENTS_PER_USER=5
+MAX_SSE_CLIENTS_TOTAL=250
+
+# --- Timing -------------------------------------------------
+RESUME_STAGGER_MS=4000
+SHUTDOWN_GRACE_MS=15000
+
+# --- Password Hashing ---------------------------------------
+# bcrypt work factor. 12 = good brute-force resistance.
+# Do NOT lower below 10 in production.
+BCRYPT_ROUNDS=12
+
+# --- Docker Memory Limits -----------------------------------
+# Used by docker-compose.prod.yml.
+#   t3.medium 4GB  -> MEM_LIMIT=2.5G  SWAP_LIMIT=2.5G
+#   t3.large  8GB  -> MEM_LIMIT=6G    SWAP_LIMIT=6G
+#   t3.xlarge 16GB -> MEM_LIMIT=14G   SWAP_LIMIT=14G
+MEM_LIMIT=6G
+SWAP_LIMIT=6G
+
+# --- Google Calendar (optional) ----------------------------
+GOOGLE_CALENDAR_CLIENT_ID=
+GOOGLE_CALENDAR_CLIENT_SECRET=
+GOOGLE_CALENDAR_REDIRECT_URI=https://ai4automation.in/api/calendar/oauth/callback
+
+# --- Credential Rotation Notice ----------------------------
+# Rotate these if this file was ever accidentally committed:
+#   1. SESSION_SECRET        -- invalidates all active sessions
+#   2. GEMINI_API_KEY        -- revoke in Google AI Studio
+#   3. GOOGLE_CALENDAR_CLIENT_SECRET -- revoke in Google Cloud Console
+#   4. GitHub SSH_PRIVATE_KEY secret -- rotate in GitHub Actions

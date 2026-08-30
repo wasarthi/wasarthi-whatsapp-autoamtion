@@ -1,19 +1,54 @@
-name: Deploy to production
+name: CI → Deploy to production
 
-# Runs on every push to updated-WA. The runner checks out the code itself
-# (no GitHub credentials needed on the server for that), rsyncs it to the
-# EC2 box over SSH, then rebuilds the container there with Docker Compose.
-# If `docker compose build` fails, Compose never touches the
-# currently-running container, so a broken commit here does not take the
-# live app down — it just fails this workflow and leaves the previous
-# version running.
+# Runs on every push to updated-WA.
+#
+# Gate order (each must pass before the next runs):
+#   1. npm ci           — clean dependency install (catches lock-file drift)
+#   2. npm test         — full Jest suite (0 failures required)
+#   3. docker build     — image builds without errors
+#   4. rsync to EC2     — only reached if all three above pass
+#   5. docker compose up — rolls out new image
+#   6. health check     — verifies the new container is serving HTTPS
+#
+# If the build or tests fail, the currently-running container is untouched.
+# Only a fully-verified commit can replace the live service.
 on:
   push:
     branches:
       - updated-WA
 
 jobs:
+  test:
+    name: Test & Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Clean dependency install
+        run: npm ci
+
+      - name: Run full test suite
+        run: npm test -- --forceExit
+        env:
+          # Ensure the CI environment is clean — no production .env exists here,
+          # but be explicit so the guard in src/config/app.js and tests/setup.js
+          # is never accidentally bypassed.
+          NODE_ENV: test
+          # CI has no real Gemini key; tests mock it. An empty string is correct.
+          GEMINI_API_KEY: ''
+
+      - name: Verify Docker image builds cleanly
+        run: docker build --no-cache -t whatsapp-automation:ci-${{ github.sha }} .
+
   deploy:
+    name: Deploy to production
+    needs: test          # only runs if the test job above passes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,8 +79,8 @@ jobs:
 
       - name: Verify it is actually reachable over HTTPS
         run: |
-          for i in $(seq 1 10); do
+          for i in $(seq 1 12); do
             if curl -sf https://ai4automation.in/health; then exit 0; fi
-            sleep 5
+            sleep 10
           done
           echo "Health check failed after retries"; exit 1

@@ -9,7 +9,15 @@
  *
  * server.js keeps the process concerns: listening, signals, crash policy.
  */
-require('dotenv').config();
+// Only load .env in non-test environments. In test mode, tests/setup.js
+// owns the environment: it deletes production-only vars and sets controlled
+// values before any module loads. Re-running dotenv.config() here after a
+// Jest module-cache reset would overwrite those test values with the
+// developer's real .env (including BOOTSTRAP_ADMIN_EMAIL, real API keys,
+// etc.), breaking test isolation.
+if (process.env.NODE_ENV !== 'test') {
+    require('dotenv').config();
+}
 const express = require('express');
 const cors    = require('cors');
 const path    = require('path');

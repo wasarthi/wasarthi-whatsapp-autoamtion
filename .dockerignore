@@ -2,9 +2,39 @@ node_modules
 npm-debug.log
 .git
 .gitignore
+
+# Runtime secrets / credentials — must never be baked into image layers
+.env
+.env.*
+!.env.example
+
+# Persistent state — mounted as Docker volumes, not baked in
 data/
 .wwebjs_auth/
 .wwebjs_cache/
-.env
+
+# Logs and error files
 *.log
+*.err
+server.log
+server.err
+
+# Test infrastructure — not needed at runtime
+tests/
+coverage/
+jest.config.js
+
+# Development-only scripts
+scripts/dev/
+
+# Local load-test scripts (contain no production logic)
+scripts/load-test-*.js
+
+# Large documentation files (save image space)
 PROJECT_DEPLOYMENT_ANALYSIS.md
+WHATSAPP_AUTOMATION_COMPLETE_SYSTEM_DOCUMENTATION.md
+BUG_REPORT.md
+
+# Misc dev files
+opencode.json
+test-data/

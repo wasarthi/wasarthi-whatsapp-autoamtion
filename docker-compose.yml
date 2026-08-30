@@ -27,17 +27,18 @@ services:
       - .env
     environment:
       - NODE_ENV=production
-      # Each WhatsApp session spawns a Chromium process (~150-250MB each).
-      # With hibernation enabled (SESSION_IDLE_TIMEOUT_MS), idle sessions free
-      # their Chrome process automatically, so we can safely allow more
-      # concurrent slots than would otherwise fit in RAM — realistic active
-      # sessions at any given moment stay well below this cap.
-      - MAX_CONCURRENT_WHATSAPP_SESSIONS=5
-      # Hibernate idle sessions after 2 hours (no messages + no open tab).
+      # SESSION_IDLE_TIMEOUT_MS: hibernate idle Chromium sessions after this
+      # many milliseconds of inactivity (no messages + no open dashboard tab).
       # Chrome is silently restarted when the user next opens the dashboard
       # or an inbound message arrives — no QR re-scan needed.
+      # Default: 2 hours (7200000 ms). Reduce if RAM is constrained.
       - SESSION_IDLE_TIMEOUT_MS=7200000
       - FORCE_HTTPS=true
+      # MAX_CONCURRENT_WHATSAPP_SESSIONS is intentionally NOT set here.
+      # Set it in your .env file using the sizing guide in .env.example:
+      #   (total_RAM_GB - 1.5) × 3   e.g. 4GB server → 7, 8GB server → 19
+      # Hardcoding it here silently overrides .env, which is how a deploy
+      # meant to support 15 sessions gets stuck at 5 with no obvious reason.
     ports:
       - "3000:3000"
     volumes:

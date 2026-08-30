@@ -15,10 +15,24 @@ services:
     deploy:
       resources:
         limits:
-          memory: 1.5G  # Leave headroom for OS + Caddy on a 2GB t3.small
-          # Allow Docker to use the host swap file set up during AWS provisioning.
-          # This absorbs Chrome's startup RAM spikes without OOM-killing the container.
-    memswap_limit: 3G
+          # Set MEM_LIMIT in your .env to match your EC2 instance.
+          # Leave ~1.5GB headroom for OS + Caddy + restart burst.
+          # Sizing guide (MAX_CONCURRENT_WHATSAPP_SESSIONS in .env controls Chrome):
+          #
+          #   Instance  | RAM  | MEM_LIMIT | Max WA sessions
+          #   t3.medium |  4GB |    2.5G   |  7  (≈7 × 250MB = 1.75GB Chrome)
+          #   t3.large  |  8GB |    6G     | 19  (≈19 × 250MB = 4.75GB Chrome)
+          #   t3.xlarge | 16GB |   14G     | 43  (≈43 × 250MB = 10.75GB Chrome)
+          #
+          # Without this set the container is unconstrained — Docker will
+          # OOM-kill it at OS level without warning instead of a controlled 503.
+          memory: ${MEM_LIMIT:-2.5G}
+    # memswap_limit = memory + swap available. Setting it equal to memory
+    # disables swap for this container, which is safer: swap hides OOM
+    # conditions and causes Chrome to thrash rather than fail cleanly.
+    # If you experience OOM kills during Chrome startup bursts, set
+    # SWAP_LIMIT in .env to memory + 1G (e.g. 3.5G for a 2.5G MEM_LIMIT).
+    memswap_limit: ${SWAP_LIMIT:-2.5G}
 
   caddy:
     image: caddy:2-alpine

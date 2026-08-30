@@ -21,6 +21,7 @@ FROM node:20-bookworm-slim
 # thing that can fail on a host you don't control the network policy of.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     chromium \
+    tini \
     ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 libatk1.0-0 \
     libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgbm1 \
     libglib2.0-0 libgtk-3-0 libnspr4 libnss3 libpango-1.0-0 libpangocairo-1.0-0 \
@@ -64,4 +65,15 @@ VOLUME ["/app/data", "/app/.wwebjs_auth", "/app/.wwebjs_cache"]
 ENV NODE_ENV=production
 EXPOSE 3000
 
+# tini is the init process (PID 1). It:
+#   1. Reaps any orphaned Chromium zombie processes that launcher.js's own
+#      child management misses (this matters when Chrome crashes and the
+#      cleanup path throws before waitpid).
+#   2. Forwards SIGTERM to launcher.js so docker stop triggers the full
+#      graceful-shutdown sequence (flush DB, close WhatsApp sessions).
+#
+# docker-compose.yml also sets `init: true`, which adds a tini from Docker's
+# bundled copy. Having tini installed here means raw `docker run` without
+# --init also gets correct signal/zombie handling.
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["node", "launcher.js"]

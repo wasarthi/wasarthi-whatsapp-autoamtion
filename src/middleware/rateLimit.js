@@ -34,8 +34,9 @@ function rateLimit({ windowMs, max, keyFn, message, code = 'RATE_LIMITED' }) {
         if (process.env.DISABLE_RATE_LIMITS === 'true') {
             return next();
         }
-        const key = keyFn(req);
+        
         const now = Date.now();
+        const key = keyFn(req);
         let bucket = buckets.get(key);
         if (!bucket || now > bucket.resetAt) {
             bucket = { count: 0, resetAt: now + windowMs };
