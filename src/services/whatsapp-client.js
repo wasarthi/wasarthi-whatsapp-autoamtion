@@ -35,13 +35,14 @@ const MAX_SSE_CLIENTS_TOTAL = parseInt(process.env.MAX_SSE_CLIENTS_TOTAL, 10) ||
 // PERSIST_ROOT (see src/config/paths.js). This keeps sessions on the same
 // mounted disk as the database so a redeploy doesn't log every tenant out.
 
-// ─── Session Hibernation ───────────────────────────────────────
-// When a user has no active browser tab (SSE clients = 0) and has not sent
-// or received a WhatsApp message within this window, their headless Chrome
-// process is destroyed to free RAM. Their auth credentials remain on disk so
-// the next time the user opens the dashboard (or an inbound message arrives)
-// Chrome is silently re-launched without requiring a new QR scan.
-// Default: 2 hours.  Override via SESSION_IDLE_TIMEOUT_MS env var.
+// ─── Session Hibernation (opt-in) ─────────────────────────────
+// By default sessions are kept alive indefinitely. Sessions reconnect
+// automatically on server restart via resumeExistingSessions() in server.js.
+//
+// On very low-RAM servers (1GB t3.micro), enable hibernation to free Chrome
+// RAM for idle users. Set ENABLE_SESSION_HIBERNATION=true in .env.
+// Default: 2 hours. Override with SESSION_IDLE_TIMEOUT_MS.
+const HIBERNATION_ENABLED = process.env.ENABLE_SESSION_HIBERNATION === 'true';
 const rawIdleMs = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10);
 const SESSION_IDLE_TIMEOUT_MS = (Number.isFinite(rawIdleMs) && rawIdleMs >= 60000)
     ? rawIdleMs
@@ -186,6 +187,7 @@ function clearTimers(s) {
  * means the user has been genuinely idle: no messages AND no open tab.
  */
 function armHibernationTimer(userId) {
+    if (!HIBERNATION_ENABLED) return; // disabled by default — keep Chrome alive always
     const s = getSession(userId, false);
     if (!s) return;
     // Don't hibernate if user explicitly disconnected or session is not live.
@@ -778,6 +780,7 @@ function getSessionMetrics() {
         hibernated,
         maxConcurrent: MAX_CONCURRENT_SESSIONS,
         idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
+        hibernationEnabled: HIBERNATION_ENABLED,
         sseClients: totalSseClients,
         maxSseClients: MAX_SSE_CLIENTS_TOTAL
     };
