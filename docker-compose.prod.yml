@@ -15,7 +15,10 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2G  # Cap memory so Chromium sessions don't OOM the host
+          memory: 1.5G  # Leave headroom for OS + Caddy on a 2GB t3.small
+          # Allow Docker to use the host swap file set up during AWS provisioning.
+          # This absorbs Chrome's startup RAM spikes without OOM-killing the container.
+    memswap_limit: 3G
 
   caddy:
     image: caddy:2-alpine

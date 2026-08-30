@@ -28,9 +28,15 @@ services:
     environment:
       - NODE_ENV=production
       # Each WhatsApp session spawns a Chromium process (~150-250MB each).
-      # With a 2GB memory limit, 3 sessions use ~750MB leaving headroom for
-      # Node, the OS, and Caddy. Raise this if you upgrade to a bigger VPS.
-      - MAX_CONCURRENT_WHATSAPP_SESSIONS=3
+      # With hibernation enabled (SESSION_IDLE_TIMEOUT_MS), idle sessions free
+      # their Chrome process automatically, so we can safely allow more
+      # concurrent slots than would otherwise fit in RAM — realistic active
+      # sessions at any given moment stay well below this cap.
+      - MAX_CONCURRENT_WHATSAPP_SESSIONS=5
+      # Hibernate idle sessions after 2 hours (no messages + no open tab).
+      # Chrome is silently restarted when the user next opens the dashboard
+      # or an inbound message arrives — no QR re-scan needed.
+      - SESSION_IDLE_TIMEOUT_MS=7200000
       - FORCE_HTTPS=true
     ports:
       - "3000:3000"

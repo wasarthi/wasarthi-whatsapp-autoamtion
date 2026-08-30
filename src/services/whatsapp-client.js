@@ -35,6 +35,18 @@ const MAX_SSE_CLIENTS_TOTAL = parseInt(process.env.MAX_SSE_CLIENTS_TOTAL, 10) ||
 // PERSIST_ROOT (see src/config/paths.js). This keeps sessions on the same
 // mounted disk as the database so a redeploy doesn't log every tenant out.
 
+// ─── Session Hibernation ───────────────────────────────────────
+// When a user has no active browser tab (SSE clients = 0) and has not sent
+// or received a WhatsApp message within this window, their headless Chrome
+// process is destroyed to free RAM. Their auth credentials remain on disk so
+// the next time the user opens the dashboard (or an inbound message arrives)
+// Chrome is silently re-launched without requiring a new QR scan.
+// Default: 2 hours.  Override via SESSION_IDLE_TIMEOUT_MS env var.
+const rawIdleMs = parseInt(process.env.SESSION_IDLE_TIMEOUT_MS, 10);
+const SESSION_IDLE_TIMEOUT_MS = (Number.isFinite(rawIdleMs) && rawIdleMs >= 60000)
+    ? rawIdleMs
+    : 2 * 60 * 60 * 1000; // 2 hours
+
 let totalSseClients = 0;
 
 function countActiveSessions() {
@@ -74,6 +86,7 @@ function newSessionState() {
         sseClients: [],
         keepAliveTimer: null,
         watchdogTimer: null,
+        hibernationTimer: null,
         isInitializing: false,
         restartTimer: null,
         crashCount: 0,
@@ -81,7 +94,10 @@ function newSessionState() {
         lastError: null,
         startedAt: null,
         destroyed: false,
-        userDisconnected: false
+        userDisconnected: false,
+        // Hibernation: tracks last message activity to decide when to free Chrome.
+        lastActivityAt: Date.now(),
+        isHibernated: false
     };
 }
 
@@ -155,9 +171,45 @@ function removeSseClient(s, client) {
 
 // ─── Timers ───────────────────────────────────────────────────
 function clearTimers(s) {
-    if (s.keepAliveTimer) { clearInterval(s.keepAliveTimer); s.keepAliveTimer = null; }
-    if (s.watchdogTimer)  { clearInterval(s.watchdogTimer);  s.watchdogTimer  = null; }
-    if (s.restartTimer)   { clearTimeout(s.restartTimer);    s.restartTimer   = null; }
+    if (s.keepAliveTimer)   { clearInterval(s.keepAliveTimer);  s.keepAliveTimer   = null; }
+    if (s.watchdogTimer)    { clearInterval(s.watchdogTimer);   s.watchdogTimer    = null; }
+    if (s.restartTimer)     { clearTimeout(s.restartTimer);     s.restartTimer     = null; }
+    if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; }
+}
+
+// ─── Session Hibernation ──────────────────────────────────────
+/**
+ * Schedules (or re-arms) the idle hibernation timer for one session.
+ *
+ * Called after every inbound/outbound message activity, and cancelled when
+ * a user opens the dashboard (SSE client connects). If the timer fires it
+ * means the user has been genuinely idle: no messages AND no open tab.
+ */
+function armHibernationTimer(userId) {
+    const s = getSession(userId, false);
+    if (!s) return;
+    // Don't hibernate if user explicitly disconnected or session is not live.
+    if (s.destroyed || s.userDisconnected || !s.isConnected) return;
+    if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); }
+    s.hibernationTimer = setTimeout(async () => {
+        s.hibernationTimer = null;
+        const now = Date.now();
+        // Final gate: only hibernate if still no SSE watchers and still idle.
+        if (s.sseClients.length > 0) return;
+        if (now - s.lastActivityAt < SESSION_IDLE_TIMEOUT_MS - 5000) return;
+        if (!s.isConnected || s.destroyed || s.userDisconnected) return;
+        console.log(`💤 [user ${userId}] Session idle for ${(SESSION_IDLE_TIMEOUT_MS / 60000).toFixed(0)} min — hibernating Chrome to free RAM.`);
+        s.isHibernated = true;
+        clearTimers(s);
+        await safeDestroyClient(s);
+        s.isConnected    = false;
+        s.isInitializing = false;
+        s.currentQR      = null;
+        // Do NOT set s.destroyed or s.userDisconnected — auth stays on disk
+        // and initWhatsAppClient() will revive the session on next open.
+        console.log(`💤 [user ${userId}] Hibernated. Auth saved; will resume on next activity.`);
+    }, SESSION_IDLE_TIMEOUT_MS);
+    s.hibernationTimer.unref?.();
 }
 
 // ─── Safe client destroy ──────────────────────────────────────
@@ -329,7 +381,21 @@ function initWhatsAppClient(userId) {
                     '--disable-accelerated-2d-canvas',
                     '--no-first-run',
                     '--disable-gpu',
-                    '--disable-extensions'
+                    '--disable-extensions',
+                    // ── Memory-saving flags for low-RAM servers ──────────────
+                    // Limit V8 heap to 256MB per renderer (default can be 512MB+)
+                    '--js-flags=--max-old-space-size=256',
+                    // Disable features that use background RAM even when idle
+                    '--disable-background-timer-throttling',
+                    '--disable-backgrounding-occluded-windows',
+                    '--disable-breakpad',
+                    '--disable-component-extensions-with-background-pages',
+                    '--disable-ipc-flooding-protection',
+                    // Reduce number of renderer processes
+                    '--renderer-process-limit=2',
+                    // Don't run Chrome's internal crash reporter — saves ~30MB
+                    '--disable-crash-reporter',
+                    '--noerrdialogs'
                 ]
             }
         });
@@ -382,9 +448,11 @@ function attachHandlers(userId, s, client) {
         console.log(`✅ [user ${userId}] WhatsApp Client is READY!`);
         s.isConnected    = true;
         s.isInitializing = false;
+        s.isHibernated   = false;
         s.currentQR      = null;
         s.crashCount     = 0;
         s.lastError      = null;
+        s.lastActivityAt = Date.now();
 
         try {
             broadcastSSE(userId, { type: 'ready', phone: client.info?.wid?.user || 'unknown' });
@@ -471,6 +539,10 @@ function attachHandlers(userId, s, client) {
             const phone = String(msg.from).split('@')[0];
             if (!/^\d{7,15}$/.test(phone)) return;
 
+            // Mark the session as active so the hibernation timer is re-armed.
+            s.lastActivityAt = Date.now();
+            armHibernationTimer(userId);
+
             let contactName = '';
             try {
                 const contact = await msg.getContact();
@@ -507,6 +579,7 @@ async function destroyClientForUser(userId) {
     if (!s) return;
     s.destroyed = true;
     s.userDisconnected = true;
+    s.isHibernated = false;
     clearTimers(s);
     s.isConnected = false;
     s.isInitializing = false;
@@ -615,6 +688,10 @@ function addSSEClient(userId, req, res) {
         try { res.write(`data: ${JSON.stringify(obj)}\n\n`); } catch (e) { removeSseClient(s, client); }
     };
 
+    // Cancel the hibernation countdown while the user has their tab open —
+    // there's no point freeing Chrome while they're actively looking at it.
+    if (s.hibernationTimer) { clearTimeout(s.hibernationTimer); s.hibernationTimer = null; }
+
     if (s.isConnected && s.client?.info) {
         send({ type: 'ready', phone: s.client.info.wid.user });
     } else if (s.currentQR) {
@@ -623,7 +700,9 @@ function addSSEClient(userId, req, res) {
         send({ type: 'disconnected' });
     } else {
         send({ type: 'loading' });
-        // Nothing has been started for this user yet — kick off a lazy connect.
+        // Covers two cases:
+        //   1. Nothing started yet (first visit after signup)
+        //   2. Session was hibernated — silently revive Chrome without a new QR.
         if (!s.isInitializing && !s.client) {
             const result = initWhatsAppClient(userId);
             if (result && result.accepted === false) send({ type: 'error', data: result.reason });
@@ -649,7 +728,14 @@ client.heartbeat = setInterval(() => {
     // Both events matter: 'close' covers a normal disconnect, 'error' covers a
     // reset connection. Missing either leaks the timer and the array entry —
     // which is how an SSE endpoint becomes a memory and file-descriptor leak.
-    const cleanup = () => removeSseClient(s, client);
+    const cleanup = () => {
+        removeSseClient(s, client);
+        // User closed their tab. If nobody else is watching, re-arm the
+        // hibernation countdown so Chrome is freed after the idle window.
+        if (s.sseClients.length === 0 && s.isConnected && !s.destroyed && !s.userDisconnected) {
+            armHibernationTimer(userId);
+        }
+    };
     req.on('close', cleanup);
     req.on('error', cleanup);
     res.on('error', cleanup);
@@ -663,12 +749,13 @@ function getClient(userId) {
 
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
-    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null };
+    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false };
     return {
         connected: s.isConnected,
         phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
         started: !!(s.client || s.isInitializing),
         initializing: !!s.isInitializing,
+        hibernated: !!s.isHibernated,
         error: s.lastError || null,
         // Expose QR data URL so the frontend can fetch it via REST polling
         // when the SSE stream is blocked by a cloud load balancer / proxy.
@@ -678,16 +765,19 @@ function getStatus(userId) {
 
 /** Registry-wide counters for /health and capacity monitoring. */
 function getSessionMetrics() {
-    let connected = 0, initializing = 0;
+    let connected = 0, initializing = 0, hibernated = 0;
     for (const s of sessions.values()) {
         if (s.isConnected) connected++;
         else if (s.isInitializing) initializing++;
+        if (s.isHibernated) hibernated++;
     }
     return {
         sessions: sessions.size,
         connected,
         initializing,
+        hibernated,
         maxConcurrent: MAX_CONCURRENT_SESSIONS,
+        idleTimeoutMs: SESSION_IDLE_TIMEOUT_MS,
         sseClients: totalSseClients,
         maxSseClients: MAX_SSE_CLIENTS_TOTAL
     };
