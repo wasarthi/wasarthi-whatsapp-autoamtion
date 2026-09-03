@@ -298,6 +298,40 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
     s.restartTimer.unref?.();
 }
 
+// ─── Initialization Queue ───────────────────────────────────────
+const initQueue = [];
+let isInitializingAnyClient = false;
+
+async function processInitQueue() {
+    if (isInitializingAnyClient || initQueue.length === 0) return;
+    isInitializingAnyClient = true;
+
+    const { userId, client } = initQueue.shift();
+    const s = getSession(userId, false);
+
+    if (!s || s.destroyed || !s.client) {
+        isInitializingAnyClient = false;
+        setTimeout(processInitQueue, 100);
+        return;
+    }
+
+    console.log(`⏳ [user ${userId}] Initializing WhatsApp Web client (from queue)...`);
+    try {
+        await client.initialize();
+    } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        console.error(`❌ [user ${userId}] client.initialize() error:`, msg);
+        s.isInitializing = false;
+        s.lastError = `WhatsApp launch error: ${msg.split('\n')[0]}`;
+        scheduleRestart(userId, 12000);
+    } finally {
+        isInitializingAnyClient = false;
+        // Wait 4 seconds before allowing the next client to initialize.
+        // This gives the CPU time to settle after the massive Puppeteer CPU spike.
+        setTimeout(processInitQueue, 4000); 
+    }
+}
+
 // ─── Main init (per user) ───────────────────────────────────────
 /**
  * Starts (or reuses) one account's WhatsApp client.
@@ -413,14 +447,9 @@ function initWhatsAppClient(userId) {
     const client = s.client;
     attachHandlers(userId, s, client);
 
-    console.log(`⏳ [user ${userId}] Initializing WhatsApp Web client...`);
-    client.initialize().catch(err => {
-        const msg = err && err.message ? err.message : String(err);
-        console.error(`❌ [user ${userId}] client.initialize() error:`, msg);
-        s.isInitializing = false;
-        s.lastError = `WhatsApp launch error: ${msg.split('\n')[0]}`;
-        scheduleRestart(userId, 12000);
-    });
+    console.log(`⏳ [user ${userId}] Added to WhatsApp initialization queue...`);
+    initQueue.push({ userId, client });
+    processInitQueue();
 
     return { accepted: true, starting: true };
 }
