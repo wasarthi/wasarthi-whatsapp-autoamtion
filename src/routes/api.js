@@ -168,6 +168,15 @@ const waConnectLimiter = perUser('wa-connect', {
 });
 
 router.post('/whatsapp/connect', waConnectLimiter, (req, res) => {
+    // Only admin accounts or users explicitly granted access may start a
+    // WhatsApp session. Regular users default to wa_enabled = 0.
+    if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp access has not been enabled for your account. Please contact the administrator.',
+            code: 'WA_NOT_ENABLED'
+        });
+    }
     const result = initWhatsAppClient(req.user.id);
     if (result && result.accepted === false) {
         return res.status(503).json({ success: false, error: result.reason, code: 'WA_AT_CAPACITY' });

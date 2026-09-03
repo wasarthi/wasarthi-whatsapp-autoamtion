@@ -65,6 +65,7 @@ router.patch('/users/:id', asyncHandler(async (req, res) => {
     if (rule_limit !== undefined)    fields.rule_limit = clampInt(rule_limit, { min: 0, max: 100000, fallback: 0 });
     if (business_name !== undefined) fields.business_name = optionalString(business_name, 'business_name', LIMITS.CONTACT_NAME);
     if (owner_name !== undefined)    fields.owner_name = optionalString(owner_name, 'owner_name', LIMITS.CONTACT_NAME);
+    if (body.wa_enabled !== undefined) fields.wa_enabled = body.wa_enabled ? 1 : 0;
 
     const updated = updateUser(id, fields);
 
@@ -86,6 +87,12 @@ router.patch('/users/:id', asyncHandler(async (req, res) => {
     // If suspended, tear down their live WhatsApp session (and its Chrome
     // process, and its SSE streams) so it can't keep sending on their behalf.
     if (fields.status === 'suspended') {
+        try { await destroyClientForUser(id); } catch (e) { /* non-fatal */ }
+    }
+
+    // If WhatsApp access was revoked, immediately tear down their active
+    // WhatsApp session so they can't keep sending messages after losing access.
+    if (fields.wa_enabled === 0) {
         try { await destroyClientForUser(id); } catch (e) { /* non-fatal */ }
     }
 

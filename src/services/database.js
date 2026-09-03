@@ -256,6 +256,16 @@ function prepareLegacyRename(name) {
  * on first boot.
  */
 const MIGRATIONS = [
+    // ── v8: admin-controlled WhatsApp access flag ─────────────────────────
+    {
+        version: 8,
+        name: 'users.wa_enabled: admin-controlled WhatsApp access',
+        up: () => {
+            if (!tableHasColumn('users', 'wa_enabled')) {
+                db.run('ALTER TABLE users ADD COLUMN wa_enabled INTEGER DEFAULT 0');
+            }
+        }
+    },
     // ── v6: calendar event tenant isolation ───────────────────────────────
     // The old schema had `event_id TEXT PRIMARY KEY` — a global uniqueness
     // constraint across all tenants. Google Calendar event IDs are unique
@@ -573,6 +583,7 @@ async function initDatabase() {
             plan TEXT DEFAULT 'free',
             message_limit INTEGER DEFAULT 0,
             rule_limit INTEGER DEFAULT 0,
+            wa_enabled INTEGER DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login_at DATETIME
         )
@@ -1004,11 +1015,11 @@ function touchLastLogin(id) {
 }
 
 function listUsers() {
-    return queryAll('SELECT id, email, business_name, owner_name, role, status, plan, message_limit, rule_limit, created_at, last_login_at FROM users ORDER BY created_at DESC');
+    return queryAll('SELECT id, email, business_name, owner_name, role, status, plan, message_limit, rule_limit, wa_enabled, created_at, last_login_at FROM users ORDER BY created_at DESC');
 }
 
 function updateUser(id, fields) {
-    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash'];
+    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash', 'wa_enabled'];
     const sets = [];
     const params = [];
     for (const [key, value] of Object.entries(fields)) {

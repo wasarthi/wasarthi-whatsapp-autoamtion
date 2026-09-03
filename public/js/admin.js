@@ -128,7 +128,12 @@ function renderUsers() {
                 </td>
                 <td>${rolePill}</td>
                 <td>${statusPill}</td>
-                <td><span class="wa-dot ${wa.connected ? 'connected' : ''}">${escapeHtml(waLabel)}</span></td>
+                <td>
+                    <span class="wa-dot ${wa.connected ? 'connected' : ''}">${escapeHtml(waLabel)}</span>
+                </td>
+                <td style="text-align:center">
+                    ${u.role === 'admin' ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>` : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;" onclick="toggleWaAccess(${u.id}, ${u.wa_enabled ? 0 : 1})" type="button" title="${u.wa_enabled ? 'Revoke WhatsApp access' : 'Grant WhatsApp access'}">${u.wa_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}</button>`}
+                </td>
                 <td>
                     <div style="font-size:.8rem;line-height:1.5">
                         <div>${s.messagesThisMonth || 0} msgs this month</div>
@@ -179,6 +184,20 @@ async function toggleStatus(id, newStatus) {
         await Promise.all([loadUsers(), loadPlatformStats()]);
     } catch (err) {
         showToast(err.message || 'Could not update account', 'error');
+    }
+}
+
+// ─── Grant / revoke WhatsApp access ────────────────────────────
+async function toggleWaAccess(id, newValue) {
+    const enabling = newValue === 1;
+    const label = enabling ? 'Grant WhatsApp access to this user?' : 'Revoke WhatsApp access? Their active connection will be disconnected.';
+    if (!confirm(label)) return;
+    try {
+        await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ wa_enabled: newValue }) });
+        showToast(enabling ? 'WhatsApp access granted ✅' : 'WhatsApp access revoked', 'success');
+        await loadUsers();
+    } catch (err) {
+        showToast(err.message || 'Could not update WhatsApp access', 'error');
     }
 }
 

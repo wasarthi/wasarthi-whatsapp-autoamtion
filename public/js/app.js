@@ -1947,20 +1947,34 @@ function applyConnectionState(data) {
             reconnectDiv.id = 'qrReconnectBtnContainer';
             reconnectDiv.style.textAlign = 'center';
             reconnectDiv.style.padding = '24px 16px';
-            reconnectDiv.innerHTML = `
-                <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
-                <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;">${Icon('refresh-cw', 'icon-inline')} Connect & Show QR Code</button>
-            `;
-            qrContainer.appendChild(reconnectDiv);
-            document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
-                reconnectDiv.innerHTML = `<div class="qr-loading">${Icon('loader', 'icon-inline')} Starting WhatsApp Client…</div>`;
-                try {
-                    await api('/api/whatsapp/connect', { method: 'POST' });
-                    applyConnectionState({ type: 'loading' });
-                } catch (e) {
-                    showToast(e.message || 'Failed to start connection', 'error');
-                }
-            });
+
+            // Only show connect button if admin has granted WA access to this user
+            const waAllowed = CURRENT_USER && (CURRENT_USER.role === 'admin' || CURRENT_USER.wa_enabled);
+
+            if (waAllowed) {
+                reconnectDiv.innerHTML = `
+                    <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                    <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
+                `;
+                qrContainer.appendChild(reconnectDiv);
+                document.getElementById('reconnectWaBtn')?.addEventListener('click', async () => {
+                    reconnectDiv.innerHTML = `<div class="qr-loading">${Icon('loader', 'icon-inline')} Starting WhatsApp Client…</div>`;
+                    try {
+                        await api('/api/whatsapp/connect', { method: 'POST' });
+                        applyConnectionState({ type: 'loading' });
+                    } catch (e) {
+                        showToast(e.message || 'Failed to start connection', 'error');
+                    }
+                });
+            } else {
+                reconnectDiv.innerHTML = `
+                    <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                    <p style="color:var(--color-text-secondary);font-size:.9rem;max-width:340px;margin:0 auto;line-height:1.6;">
+                        ${Icon('lock', 'icon-inline')} WhatsApp access has not been enabled for your account. Please contact your administrator.
+                    </p>
+                `;
+                qrContainer.appendChild(reconnectDiv);
+            }
         }
 
     } else if (data.type === 'loading') {
