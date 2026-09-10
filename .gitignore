@@ -31,6 +31,10 @@ test-data/
 # Coverage output
 coverage/
 
+# Build / deploy artifacts
+deploy.zip
+*.err
+
 # Logs & Debugging
 logs
 *.log

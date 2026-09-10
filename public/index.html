@@ -6,7 +6,12 @@
     <title>WhatsApp Automation — Dashboard</title>
     <meta name="description" content="Manage your WhatsApp Business automation — chatbot rules, contacts, scheduled messages and analytics.">
     <meta name="theme-color" content="#0D4530">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=2.4">
+    <style>
+        /* Failsafe: Ensure modal backdrops are hidden by default even if external stylesheet is cached */
+        .modal-backdrop { display: none !important; }
+        .modal-backdrop.show { display: flex !important; }
+    </style>
 </head>
 <body>
 
@@ -952,6 +957,13 @@
                                 <label for="prodUrl">Link (optional)</label>
                                 <input type="url" id="prodUrl" placeholder="https://…">
                             </div>
+                            <div class="form-group">
+                                <label for="prodPaymentLink">📱 UPI ID (or Payment Link)</label>
+                                <input type="text" id="prodPaymentLink" placeholder="e.g. raunaksharma2005mt@okaxis or 9876543210@paytm">
+                                <small style="color:var(--color-text-secondary);font-size:0.75rem;display:block;margin-top:4px">
+                                    ⚡ Sirf UPI ID enter karein — payment link aur scan QR code automatically create ho jayega.
+                                </small>
+                            </div>
                         </div>
                         <button type="submit" class="btn btn-secondary"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add to Catalog</button>
                     </form>
@@ -1029,12 +1041,28 @@
                 <div class="card">
                     <h2 class="card-title">WhatsApp Web QR Code</h2>
                     <p class="card-note">Scan this QR code with your personal WhatsApp to connect the bot.</p>
+                    
                     <div class="qr-container" id="qrContainer" aria-live="polite">
                         <div class="qr-loading" id="qrLoading">Waiting for QR Code… (This may take up to 30 seconds)</div>
                         <img id="qrImage" src="" alt="WhatsApp QR Code — scan with your phone" class="qr-image">
                         <div class="qr-success" id="qrSuccess" style="display:none;">
                             <span data-icon="check-circle" data-icon-class="icon-inline" aria-hidden="true"></span>WhatsApp is Connected!
                         </div>
+                    </div>
+
+                    <div style="max-width:380px;margin:16px auto 0;background:var(--color-bg);padding:14px 18px;border-radius:10px;border:1px solid var(--color-border);font-size:0.84rem;color:var(--color-text-secondary);line-height:1.6;">
+                        <strong style="color:var(--color-text-primary);display:block;margin-bottom:6px;">📱 How to connect:</strong>
+                        <ol style="margin:0;padding-left:18px;">
+                            <li>Open <strong>WhatsApp</strong> on your phone</li>
+                            <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> ➡️ <strong>Linked Devices</strong></li>
+                            <li>Tap <strong>Link a Device</strong> and scan the QR code above</li>
+                        </ol>
+                    </div>
+
+                    <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
+                        <button type="button" class="btn btn-secondary btn-sm" id="resetWaSessionBtn">
+                            <span class="btn-icon" data-icon="refresh-cw" aria-hidden="true"></span> Reset &amp; Get Fresh QR Code
+                        </button>
                     </div>
                 </div>
             </div>
@@ -1187,7 +1215,7 @@
 <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
 
 <!-- ── Deal Detail Modal ── -->
-<div class="modal-backdrop" id="dealModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="dealModalTitle">
+<div class="modal-backdrop" id="dealModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="dealModalTitle">
     <div class="modal" id="dealModal">
         <div class="modal-header">
             <h2 id="dealModalTitle">Deal</h2>
@@ -1200,7 +1228,7 @@
 </div>
 
 <!-- ── Outreach Modal ── -->
-<div class="modal-backdrop" id="outreachModalBackdrop" style="display:none" role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
+<div class="modal-backdrop" id="outreachModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="outreachModalTitle">
     <div class="modal" id="outreachModal">
         <div class="modal-header">
             <h2 id="outreachModalTitle">Send Outreach</h2>
@@ -1245,11 +1273,74 @@
     </div>
 </div>
 
+<!-- ── Edit Product Modal ── -->
+<div class="modal-backdrop" id="productModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="productModalTitle">
+    <div class="modal" id="productModal" style="max-width:540px">
+        <div class="modal-header">
+            <h2 id="productModalTitle">Edit Product / Service</h2>
+            <button class="modal-close" id="productModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body">
+            <form id="editProductForm" novalidate>
+                <input type="hidden" id="editProdId">
+                <div class="form-row-3">
+                    <div class="form-group">
+                        <label for="editProdName">Name</label>
+                        <input type="text" id="editProdName" required placeholder="Service name">
+                    </div>
+                    <div class="form-group">
+                        <label for="editProdPrice">Price</label>
+                        <input type="text" id="editProdPrice" placeholder="e.g. ₹1,499">
+                    </div>
+                    <div class="form-group">
+                        <label for="editProdCategory">Category</label>
+                        <input type="text" id="editProdCategory" placeholder="e.g. Services">
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="editProdDesc">Description</label>
+                    <input type="text" id="editProdDesc" placeholder="Short description the AI can quote">
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="editProdUrl">Link (optional)</label>
+                        <input type="url" id="editProdUrl" placeholder="https://…">
+                    </div>
+                    <div class="form-group">
+                        <label for="editProdPaymentLink">📱 UPI ID (or Payment Link)</label>
+                        <input type="text" id="editProdPaymentLink" placeholder="e.g. raunaksharma2005mt@okaxis or 9876543210@paytm">
+                        <small style="color:var(--color-text-secondary);font-size:0.75rem;display:block;margin-top:4px">
+                            ⚡ Sirf UPI ID enter karein — payment link aur scan QR code automatically create ho jayega.
+                        </small>
+                    </div>
+                </div>
+                <div class="modal-actions" style="margin-top:16px;display:flex;justify-content:flex-end;gap:8px">
+                    <button type="button" class="btn btn-secondary" id="editProductCancelBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="saveEditProductBtn">Save Changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- ── View Product Modal ── -->
+<div class="modal-backdrop" id="viewProductModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="viewProductModalTitle">
+    <div class="modal" id="viewProductModal" style="max-width:520px">
+        <div class="modal-header">
+            <h2 id="viewProductModalTitle">Product Details</h2>
+            <button class="modal-close" id="viewProductModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body" id="viewProductModalBody">
+            <!-- Populated by JS -->
+        </div>
+    </div>
+</div>
+
 <!-- Toast container -->
 <div class="toast-container" id="toastContainer" role="status" aria-live="polite" aria-atomic="true"></div>
 
 <script src="js/chart.umd.min.js"></script>
-<script src="js/icons.js"></script>
-<script src="js/app.js"></script>
+<script src="js/icons.js?v=2.8"></script>
+<script src="js/app.js?v=2.8"></script>
 </body>
 </html>

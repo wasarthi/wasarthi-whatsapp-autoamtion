@@ -15,7 +15,7 @@
  */
 
 const path = require('path');
-const db = require(path.join(__dirname, 'src', 'database'));
+const db = require(path.join(__dirname, '..', '..', 'src', 'services', 'database'));
 
 (async () => {
     const email = (process.argv[2] || '').trim().toLowerCase();
@@ -33,15 +33,11 @@ const db = require(path.join(__dirname, 'src', 'database'));
         process.exit(1);
     }
 
-    if (user.role === 'admin') {
-        console.log(`#${user.id} ${user.email} is already an admin — nothing to change.`);
-        process.exit(0);
-    }
-
-    db.updateUser(user.id, { role: 'admin' });
+    db.updateUser(user.id, { role: 'admin', wa_enabled: 1 });
+    db.forcePersist();
     const after = db.getUserById(user.id);
 
-    console.log(`\n✅ #${after.id} ${after.email} is now role="${after.role}".`);
+    console.log(`\n✅ #${after.id} ${after.email} is now role="${after.role}", wa_enabled=${after.wa_enabled}.`);
     console.log('Start the server, log in as that account, and the Admin item');
     console.log('appears in the sidebar (or go straight to /admin).\n');
 })();

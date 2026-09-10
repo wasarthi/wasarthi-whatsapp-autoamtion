@@ -71,6 +71,9 @@ function validateEnvironment() {
         if (process.env.DISABLE_RATE_LIMITS === 'true') {
             problems.push('DISABLE_RATE_LIMITS=true must never be set in production — it turns off login brute-force protection.');
         }
+        if (!process.env.APP_URL && !process.env.BASE_URL) {
+            warnings.push('APP_URL is not set. Payment links sent to customers will use the Host header instead of a fixed domain. Set APP_URL=https://yourdomain.com in .env for reliable payment links.');
+        }
         const maxSessions = parseInt(process.env.MAX_CONCURRENT_WHATSAPP_SESSIONS, 10);
         if (Number.isFinite(maxSessions) && maxSessions > 50) {
             warnings.push(`MAX_CONCURRENT_WHATSAPP_SESSIONS=${maxSessions} — each session is a Chrome process using roughly 150-250MB. Verify the host actually has that memory.`);

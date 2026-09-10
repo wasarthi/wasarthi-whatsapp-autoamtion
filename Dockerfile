@@ -63,6 +63,13 @@ USER node
 VOLUME ["/app/data", "/app/.wwebjs_auth", "/app/.wwebjs_cache"]
 
 ENV NODE_ENV=production
+
+# Docker health check — enables auto-restart in ECS/Docker Swarm when the
+# process is hung. Uses the existing /health endpoint (deliberately
+# dependency-free, just proves the HTTP listener is alive).
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+    CMD node -e "const http = require('http'); const req = http.request({hostname:'localhost',port:3000,path:'/health',timeout:4000}, res => process.exit(res.statusCode === 200 ? 0 : 1)); req.on('error', () => process.exit(1)); req.end();"
+
 EXPOSE 3000
 
 # tini is the init process (PID 1). It:

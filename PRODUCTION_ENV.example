@@ -43,6 +43,11 @@ DEMO_MODE=false
 TRUST_PROXY=true
 FORCE_HTTPS=true
 
+# --- Public App URL <- REQUIRED ------------------------------
+# Payment links sent to customers via WhatsApp use this URL.
+# Must match your domain with https://.
+APP_URL=https://ai4automation.in
+
 # --- CORS ---------------------------------------------------
 # Your production domain(s), comma-separated.
 ALLOWED_ORIGINS=https://ai4automation.in

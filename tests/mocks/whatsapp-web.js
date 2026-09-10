@@ -55,10 +55,16 @@ class FakeClient extends EventEmitter {
         return this.state;
     }
 
-    async sendMessage(chatId, text) {
+    async sendMessage(chatId, text, options = {}) {
         if (FakeClient.sendError) throw new Error(FakeClient.sendError);
-        this.sent.push({ chatId, text });
+        this.sent.push({ chatId, text, options });
         return { id: { _serialized: `fake_${this.sent.length}_${Date.now()}` } };
+    }
+
+    async requestPairingCode(phone) {
+        const code = 'TEST1234';
+        this.emit('code', code);
+        return code;
     }
 
     async destroy() {
@@ -80,9 +86,18 @@ class LocalAuth {
     }
 }
 
+class FakeMessageMedia {
+    constructor(mimetype, data, filename) {
+        this.mimetype = mimetype;
+        this.data = data;
+        this.filename = filename;
+    }
+}
+
 module.exports = {
     Client: FakeClient,
     LocalAuth,
+    MessageMedia: FakeMessageMedia,
     // Test helpers (not part of the real library's surface).
     __instances: instances,
     __reset() {

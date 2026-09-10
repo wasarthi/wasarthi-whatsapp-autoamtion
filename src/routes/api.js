@@ -11,13 +11,14 @@ const {
     getDashboardStats, logMessage, logOutgoingMessageIdempotent, findMessageByIdempotencyKey,
     getMonthlyOutgoingCount, clearMessages,
     getLeadAnalyses, getLeadAnalysis, deleteLeadAnalysis, getConversationPhones, getLeadStats,
-    getProducts, countProducts, createProduct, updateProduct, deleteProduct,
+    getProducts, getProduct, countProducts, createProduct, updateProduct, deleteProduct,
     CRM_STAGES, getCrmDeals, getCrmDealByPhone, getCrmDealById, createCrmDeal,
     updateCrmDeal, deleteCrmDeal, getCrmStats, getCrmAnalytics, addCrmActivity, getCrmActivities,
     assertPersistable, transaction
 } = require('../services/database');
 
-const { sendTextMessage, getStatus, initWhatsAppClient, destroyClientForUser } = require('../services/whatsapp-client');
+const qrcode = require('qrcode');
+const { sendTextMessage, sendMediaMessage, getStatus, initWhatsAppClient, destroyClientForUser, requestPairingCodeForUser } = require('../services/whatsapp-client');
 const { testMessage } = require('../services/chatbot');
 const { analyzeConversation, analyzeAllConversations } = require('../services/lead-analyzer');
 const { analyzeBusinessProfile, getBusinessInfo } = require('../services/business');
@@ -187,6 +188,26 @@ router.post('/whatsapp/connect', waConnectLimiter, (req, res) => {
 router.post('/whatsapp/disconnect', waConnectLimiter, asyncHandler(async (req, res) => {
     await destroyClientForUser(req.user.id);
     res.json({ success: true });
+}));
+
+router.post('/whatsapp/pair-code', waConnectLimiter, asyncHandler(async (req, res) => {
+    if (req.user.role !== 'admin' && !req.user.wa_enabled) {
+        return res.status(403).json({
+            success: false,
+            error: 'WhatsApp access has not been enabled for your account. Please contact the administrator.',
+            code: 'WA_NOT_ENABLED'
+        });
+    }
+    const phone = req.body?.phone;
+    if (!phone) {
+        return res.status(400).json({ success: false, error: 'Phone number is required' });
+    }
+    try {
+        const code = await requestPairingCodeForUser(req.user.id, phone);
+        res.json({ success: true, data: { code } });
+    } catch (err) {
+        res.status(400).json({ success: false, error: err.message });
+    }
 }));
 
 // ─────────────────────────────────────────────────────────────
@@ -736,6 +757,53 @@ function validateProductUrl(value) {
     return parsed.toString();
 }
 
+function formatUpiLink(vpa, productName = '', price = '') {
+    const cleanVpa = String(vpa || '').replace(/%40/g, '@').trim();
+    const payeeName = (productName || 'Payment').trim().slice(0, 50);
+    let upiUrl = `upi://pay?pa=${cleanVpa}&pn=${encodeURIComponent(payeeName)}&cu=INR&tn=${encodeURIComponent(payeeName)}`;
+    const numPrice = String(price || '').replace(/[^\d.]/g, '');
+    if (numPrice && !isNaN(numPrice) && parseFloat(numPrice) > 0) {
+        upiUrl += `&am=${parseFloat(numPrice).toFixed(2)}`;
+    }
+    return upiUrl;
+}
+
+function validatePaymentLinkUrl(value, productName = '', price = '') {
+    let raw = optionalString(value, 'payment_link', LIMITS.PRODUCT_PAYMENT_LINK);
+    if (raw === '') return '';
+
+    // If raw value is a pure UPI ID (e.g. name@okaxis or 9876543210@paytm)
+    if (raw.includes('@') && !raw.includes('://') && !raw.includes(' ') && !raw.includes('/')) {
+        const vpa = raw.trim();
+        if (!/^[a-zA-Z0-9.\-_]{2,100}@[a-zA-Z0-9.\-_]{2,50}$/.test(vpa)) {
+            throw new ValidationError('Invalid UPI ID format (e.g. name@okhdfcbank or 9876543210@paytm)', 'payment_link');
+        }
+        raw = formatUpiLink(vpa, productName, price);
+    } else if (raw.startsWith('upi://')) {
+        // Re-sync existing upi:// URL with latest payee name and exact price
+        try {
+            const parsed = new URL(raw);
+            const pa = parsed.searchParams.get('pa');
+            if (pa) {
+                const effectivePrice = price || parsed.searchParams.get('am') || '';
+                const effectiveName = productName || parsed.searchParams.get('pn') || 'Payment';
+                raw = formatUpiLink(pa, effectiveName, effectivePrice);
+            }
+        } catch (e) {}
+    }
+
+    let parsed;
+    try {
+        parsed = new URL(raw);
+    } catch (e) {
+        throw new ValidationError('Payment link must be a valid UPI ID (e.g. name@okaxis) or http(s) URL.', 'payment_link');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:' && parsed.protocol !== 'upi:') {
+        throw new ValidationError('Payment link must start with http://, https://, or upi:// (or provide a UPI ID)', 'payment_link');
+    }
+    return parsed.toString();
+}
+
 router.post('/products', writeLimiter, requireDurableWrite, (req, res) => {
     const body = req.body || {};
     const name = sanitizeSpreadsheetCell(requireString(body.name, 'name', { max: LIMITS.PRODUCT_NAME }));
@@ -753,13 +821,17 @@ router.post('/products', writeLimiter, requireDurableWrite, (req, res) => {
         description: optionalString(body.description, 'description', LIMITS.PRODUCT_DESCRIPTION),
         price: optionalString(body.price, 'price', LIMITS.PRODUCT_PRICE),
         category: optionalString(body.category, 'category', LIMITS.PRODUCT_CATEGORY),
-        url: validateProductUrl(body.url)
+        url: validateProductUrl(body.url),
+        payment_link: validatePaymentLinkUrl(body.payment_link, name, body.price)
     });
     res.json({ success: true, data: product });
 });
 
 router.put('/products/:id', writeLimiter, requireDurableWrite, (req, res) => {
     const id = requireId(req.params.id, 'product id');
+    const current = getProduct(req.user.id, id);
+    if (!current) return res.status(404).json({ success: false, error: 'Product not found' });
+
     const body = req.body || {};
 
     const fields = {};
@@ -767,8 +839,17 @@ router.put('/products/:id', writeLimiter, requireDurableWrite, (req, res) => {
     if (body.description !== undefined) fields.description = optionalString(body.description, 'description', LIMITS.PRODUCT_DESCRIPTION);
     if (body.price !== undefined)       fields.price = optionalString(body.price, 'price', LIMITS.PRODUCT_PRICE);
     if (body.category !== undefined)    fields.category = optionalString(body.category, 'category', LIMITS.PRODUCT_CATEGORY);
-    if (body.url !== undefined)         fields.url = validateProductUrl(body.url);
-    if (body.is_active !== undefined)   fields.is_active = (body.is_active === true || body.is_active === 1 || body.is_active === '1') ? 1 : 0;
+    if (body.url !== undefined)          fields.url = validateProductUrl(body.url);
+    if (body.payment_link !== undefined) {
+        const pName = fields.name || current.name;
+        const pPrice = fields.price !== undefined ? fields.price : current.price;
+        fields.payment_link = validatePaymentLinkUrl(body.payment_link, pName, pPrice);
+    } else if (fields.price !== undefined && current.payment_link && current.payment_link.startsWith('upi://')) {
+        // Price updated alone: automatically re-sync the UPI amount to the new price
+        const pName = fields.name || current.name;
+        fields.payment_link = validatePaymentLinkUrl(current.payment_link, pName, fields.price);
+    }
+    if (body.is_active !== undefined)     fields.is_active = (body.is_active === true || body.is_active === 1 || body.is_active === '1') ? 1 : 0;
 
     const updated = updateProduct(req.user.id, id, fields);
     if (!updated) return res.status(404).json({ success: false, error: 'Product not found' });
@@ -781,6 +862,199 @@ router.delete('/products/:id', writeLimiter, (req, res) => {
     if (!changes) return res.status(404).json({ success: false, error: 'Product not found' });
     res.json({ success: true });
 });
+
+// Generate a QR Code data URL for the product's payment link or URL
+router.get('/products/:id/qr', async (req, res) => {
+    const id = requireId(req.params.id, 'product id');
+    const product = getProduct(req.user.id, id);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    let targetUrl = product.payment_link || product.url;
+    if (!targetUrl) {
+        return res.status(400).json({ success: false, error: 'Product has no payment link or URL configured' });
+    }
+    if (targetUrl.startsWith('upi://') && product.price) {
+        targetUrl = validatePaymentLinkUrl(targetUrl, product.name, product.price);
+    }
+
+    try {
+        const qrDataUrl = await qrcode.toDataURL(targetUrl, {
+            width: 300,
+            margin: 2,
+            color: {
+                dark: '#07281D',
+                light: '#FFFFFF'
+            }
+        });
+        res.json({ success: true, data: { qr: qrDataUrl, link: targetUrl, name: product.name, price: product.price } });
+    } catch (err) {
+        res.status(500).json({ success: false, error: 'Failed to generate QR code' });
+    }
+});
+
+// Send a test preview of the product and payment link to WhatsApp
+router.post('/products/:id/test-send', writeLimiter, asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'product id');
+    const product = getProduct(req.user.id, id);
+    if (!product) return res.status(404).json({ success: false, error: 'Product not found' });
+
+    let phone = null;
+    if (req.body && req.body.phone && String(req.body.phone).trim() !== '') {
+        const raw = String(req.body.phone).trim();
+        const digitsOnly = raw.replace(/[\s()+\-.]/g, '');
+        // Auto-handle 10-digit Indian numbers without country code
+        if (digitsOnly.length === 10 && /^[6-9]/.test(digitsOnly)) {
+            phone = '91' + digitsOnly;
+        } else {
+            phone = normalizePhone(raw);
+        }
+    } else {
+        const waStatus = getStatus(req.user.id);
+        if (waStatus && waStatus.connected && waStatus.phone) {
+            phone = String(waStatus.phone).replace(/\D/g, '').split(':')[0];
+        }
+    }
+
+    if (!phone) {
+        return res.status(400).json({
+            success: false,
+            error: 'Please provide a destination phone number or connect your WhatsApp first.'
+        });
+    }
+
+function getLanIp() {
+    try {
+        const os = require('os');
+        const nets = os.networkInterfaces();
+        for (const name of Object.keys(nets)) {
+            for (const net of nets[name]) {
+                if (net.family === 'IPv4' && !net.internal && net.address !== '127.0.0.1') {
+                    return net.address;
+                }
+            }
+        }
+    } catch (e) {}
+    return null;
+}
+
+let _appUrlWarned = false;
+function getBaseUrl(req) {
+    // 1. Explicit APP_URL / BASE_URL — always wins
+    if (process.env.APP_URL && process.env.APP_URL.trim()) {
+        return process.env.APP_URL.trim().replace(/\/+$/, '');
+    }
+    if (process.env.BASE_URL && process.env.BASE_URL.trim()) {
+        return process.env.BASE_URL.trim().replace(/\/+$/, '');
+    }
+
+    const isProd = process.env.NODE_ENV === 'production';
+    const proto = (req && (req.secure || req.get('X-Forwarded-Proto') === 'https')) ? 'https' : 'http';
+    const host = req ? req.get('host') : null;
+
+    // 2. Production: use the real Host header (behind Caddy, this is the domain)
+    if (isProd && host && !host.startsWith('localhost') && !host.startsWith('127.0.0.1')) {
+        if (!_appUrlWarned) {
+            _appUrlWarned = true;
+            console.warn('⚠️  APP_URL is not set — payment links will use the Host header. Set APP_URL in .env for reliable payment links.');
+        }
+        return `${proto}://${host}`;
+    }
+
+    // 3. Dev mode: try LAN IP so test links work on other devices
+    if (!isProd && (!host || host.startsWith('localhost') || host.startsWith('127.0.0.1'))) {
+        const lanIp = getLanIp();
+        const port = (host && host.includes(':')) ? host.split(':')[1] : (process.env.PORT || 3000);
+        if (lanIp) return `${proto}://${lanIp}:${port}`;
+    }
+
+    return `${proto}://${host || `localhost:${process.env.PORT || 3000}`}`;
+}
+
+    let paymentText = null;
+    let activePaymentLink = null;
+    if (product.payment_link) {
+        let activeLink = product.payment_link;
+        if (activeLink.startsWith('upi://') && product.price) {
+            activeLink = validatePaymentLinkUrl(activeLink, product.name, product.price);
+        }
+        activePaymentLink = activeLink;
+
+        const baseUrl = getBaseUrl(req);
+        const shortPayUrl = `${baseUrl}/pay/${product.id}`;
+
+        if (activeLink.startsWith('upi://')) {
+            const paMatch = activeLink.match(/[?&]pa=([^&]+)/);
+            const upiId = paMatch ? decodeURIComponent(paMatch[1]).replace(/%40/g, '@').trim() : '';
+            paymentText = `💳 *UPI ID:* ${upiId}\n\n🔗 *1-Tap Pay Link:*\n${shortPayUrl}`;
+        } else {
+            paymentText = `🔗 *Payment Link:*\n${shortPayUrl}`;
+        }
+    }
+
+    const lines = [
+        '🔔 *[TEST PREVIEW — Customer View]*',
+        '',
+        `Hi! 👋 Here are the details for *${product.name}*:`,
+        product.description ? `📝 ${product.description}` : null,
+        product.price ? `💰 *Price:* ${product.price}` : null,
+        paymentText,
+        product.url ? `🔗 *Details:* ${product.url}` : null,
+        '',
+        '────────────────',
+        '_This is a test preview sent from your WhatsApp Automation dashboard._'
+    ].filter(Boolean);
+
+    const previewText = lines.join('\n');
+
+    let qrDataUrl = null;
+    if (activePaymentLink) {
+        try {
+            qrDataUrl = await qrcode.toDataURL(activePaymentLink, {
+                width: 400,
+                margin: 2,
+                color: {
+                    dark: '#07281D',
+                    light: '#FFFFFF'
+                }
+            });
+        } catch (qrErr) {
+            console.warn('Failed to generate QR code for WhatsApp preview:', qrErr.message);
+        }
+    }
+
+    try {
+        if (qrDataUrl) {
+            try {
+                await sendMediaMessage(
+                    req.user.id,
+                    phone,
+                    qrDataUrl,
+                    'image/png',
+                    `Payment-QR-${product.name.replace(/[^a-zA-Z0-9]/g, '_')}.png`,
+                    previewText
+                );
+            } catch (mediaErr) {
+                console.warn('Failed to send media QR code, falling back to text:', mediaErr.message);
+                await sendTextMessage(req.user.id, phone, previewText);
+            }
+        } else {
+            await sendTextMessage(req.user.id, phone, previewText);
+        }
+        res.json({
+            success: true,
+            data: {
+                message: `Test preview message sent to +${phone}`,
+                phone,
+                hasQr: !!qrDataUrl
+            }
+        });
+    } catch (err) {
+        res.status(err.status || 500).json({
+            success: false,
+            error: err.message || 'Failed to send WhatsApp message. Ensure your WhatsApp is connected.'
+        });
+    }
+}));
 
 // Run the AI business analysis and save the sales brief
 router.post('/business/analyze', aiLimiter, withAiSlot(async (req, res) => {

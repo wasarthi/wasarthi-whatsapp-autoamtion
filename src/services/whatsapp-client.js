@@ -1,7 +1,8 @@
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const fs     = require('fs');
 const path   = require('path');
+const { execSync } = require('child_process');
 const { AUTH_ROOT, CACHE_ROOT } = require('../config/paths');
 const { processMessage } = require('./chatbot');
 
@@ -83,6 +84,7 @@ function newSessionState() {
     return {
         client: null,
         currentQR: null,
+        currentPairingCode: null,
         isConnected: false,
         sseClients: [],
         keepAliveTimer: null,
@@ -109,11 +111,24 @@ function getSession(userId, createIfMissing = true) {
     return sessions.get(userId);
 }
 
-// ─── Stale lock-file cleanup ──────────────────────────────────
-// If Chrome crashes it leaves a SingletonLock file that blocks the next launch.
+// ─── Browser process and stale lock cleanup ──────────────────
+function killBrowserProcessesForUser(userId) {
+    if (!userId) return;
+    try {
+        if (process.platform === 'win32') {
+            const script = `Get-CimInstance Win32_Process -Filter "Name = 'chrome.exe'" | Where-Object { $_.CommandLine -like '*user_${userId}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`;
+            execSync(`powershell -NoProfile -Command "${script}"`, { stdio: 'ignore', timeout: 5000 });
+        } else {
+            execSync(`pkill -9 -f "user_${userId}"`, { stdio: 'ignore', timeout: 3000 });
+        }
+    } catch (_) {}
+}
+
+// If Chrome crashes it leaves a SingletonLock or lockfile that blocks the next launch.
 function clearStaleLocks(userId) {
+    killBrowserProcessesForUser(userId);
     const authDir = authDataPath(userId);
-    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort'];
+    const lockFiles = ['SingletonLock', 'SingletonCookie', 'SingletonSocket', 'DevToolsActivePort', 'lockfile'];
     try {
         if (!fs.existsSync(authDir)) return;
         const cleanRecursive = (dir) => {
@@ -203,7 +218,7 @@ function armHibernationTimer(userId) {
         console.log(`💤 [user ${userId}] Session idle for ${(SESSION_IDLE_TIMEOUT_MS / 60000).toFixed(0)} min — hibernating Chrome to free RAM.`);
         s.isHibernated = true;
         clearTimers(s);
-        await safeDestroyClient(s);
+        await safeDestroyClient(s, userId);
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
@@ -215,11 +230,20 @@ function armHibernationTimer(userId) {
 }
 
 // ─── Safe client destroy ──────────────────────────────────────
-async function safeDestroyClient(s) {
+async function safeDestroyClient(s, userId) {
     s.isInitializing = false;
-    if (!s.client) return;
+    if (!s.client) {
+        if (userId) killBrowserProcessesForUser(userId);
+        return;
+    }
     const c = s.client;
     s.client = null;
+
+    let browserPid = null;
+    try {
+        browserPid = c.pupBrowser?.process?.()?.pid;
+    } catch (_) {}
+
     // Detach listeners before destroying. whatsapp-web.js can emit
     // 'disconnected' during teardown, which would otherwise schedule a
     // restart for a session we are deliberately shutting down — the loop that
@@ -228,7 +252,7 @@ async function safeDestroyClient(s) {
     try {
         await Promise.race([
             c.destroy(),
-            new Promise((_, rej) => setTimeout(() => rej(new Error('destroy timeout')), 8000))
+            new Promise((_, rej) => setTimeout(() => rej(new Error('destroy timeout')), 4000))
         ]);
     } catch (e) {
         console.warn('⚠️ client.destroy() warning (non-fatal):', e.message?.split('\n')[0]);
@@ -237,6 +261,20 @@ async function safeDestroyClient(s) {
                 await c.pupBrowser.close().catch(() => {});
             }
         } catch (_) {}
+    }
+
+    if (browserPid) {
+        try {
+            if (process.platform === 'win32') {
+                execSync(`taskkill /F /T /PID ${browserPid}`, { stdio: 'ignore' });
+            } else {
+                process.kill(browserPid, 'SIGKILL');
+            }
+        } catch (_) {}
+    }
+
+    if (userId) {
+        killBrowserProcessesForUser(userId);
     }
 }
 
@@ -291,7 +329,7 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
     s.restartTimer = setTimeout(async () => {
         s.restartTimer = null;
         if (s.destroyed) return;
-        await safeDestroyClient(s);
+        await safeDestroyClient(s, userId);
         s.isInitializing = false;
         initWhatsAppClient(userId);
     }, backoff);
@@ -323,6 +361,7 @@ async function processInitQueue() {
         console.error(`❌ [user ${userId}] client.initialize() error:`, msg);
         s.isInitializing = false;
         s.lastError = `WhatsApp launch error: ${msg.split('\n')[0]}`;
+        await safeDestroyClient(s, userId);
         scheduleRestart(userId, 12000);
     } finally {
         isInitializingAnyClient = false;
@@ -352,7 +391,7 @@ function initWhatsAppClient(userId) {
     if (s.isInitializing) {
         if (s.startedAt && Date.now() - s.startedAt > 300000) {
             s.isInitializing = false;
-            safeDestroyClient(s);
+            safeDestroyClient(s, userId);
         } else {
             if (s.currentQR) {
                 broadcastSSE(userId, { type: 'qr', data: s.currentQR });
@@ -387,23 +426,12 @@ function initWhatsAppClient(userId) {
             restartOnAuthFail: true,
             takeoverOnConflict: true,
             takeoverTimeoutMs: 0,
-            // A local cache (bundled with whatsapp-web.js, tested against the
-            // exact library version installed) instead of a hardcoded remote
-            // fetch: the previous config pinned an old WhatsApp Web build
-            // (2.2412.54) fetched from GitHub on every single connection
-            // attempt — a stale/deprecated version and an extra network
-            // dependency in the critical path of "show the QR code", and a
-            // real cause of the QR taking a long time (or never appearing)
-            // if that fetch is slow or GitHub is unreachable. Local cache
-            // reads whatever the last successful session already saved to
-            // .wwebjs_cache/, and transparently fetches live from
-            // web.whatsapp.com only when nothing cached matches — no GitHub
-            // dependency, no stale pin.
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
             webVersionCache: {
                 type: 'none'
             },
             puppeteer: {
-                headless: 'new',
+                headless: true,
                 protocolTimeout: 300000,
                 ...(process.env.PUPPETEER_EXECUTABLE_PATH
                     ? { executablePath: process.env.PUPPETEER_EXECUTABLE_PATH }
@@ -414,23 +442,8 @@ function initWhatsAppClient(userId) {
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-accelerated-2d-canvas',
+                    '--disable-blink-features=AutomationControlled',
                     '--no-first-run',
-                    '--disable-gpu',
-                    '--disable-extensions',
-                    // ── Memory-saving flags for low-RAM servers ──────────────
-                    // Limit V8 heap to 256MB per renderer (default can be 512MB+)
-                    '--js-flags=--max-old-space-size=256',
-                    // Disable features that use background RAM even when idle
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-breakpad',
-                    '--disable-component-extensions-with-background-pages',
-                    '--disable-ipc-flooding-protection',
-                    // Reduce number of renderer processes
-                    '--renderer-process-limit=2',
-                    // Don't run Chrome's internal crash reporter — saves ~30MB
-                    '--disable-crash-reporter',
                     '--noerrdialogs'
                 ]
             }
@@ -460,7 +473,8 @@ function attachHandlers(userId, s, client) {
         console.log(`📱 [user ${userId}] QR Code ready — open Settings → WhatsApp QR to scan.`);
         s.isConnected = false;
         try {
-            s.currentQR = await qrcode.toDataURL(qr);
+            s.currentQR = await qrcode.toDataURL(qr, { margin: 2, scale: 6 });
+            s.currentPairingCode = null;
             // Tenant-scoped: only this account's listeners receive it.
             broadcastSSE(userId, { type: 'qr', data: s.currentQR });
         } catch (err) {
@@ -468,10 +482,25 @@ function attachHandlers(userId, s, client) {
         }
     });
 
+    // ── Pairing Code ─────────────────────────────────────────
+    client.on('code', (code) => {
+        console.log(`🔑 [user ${userId}] Pairing code received:`, code);
+        s.currentPairingCode = code;
+        broadcastSSE(userId, { type: 'code', data: code });
+    });
+
+    // ── Sync Progress ────────────────────────────────────────
+    client.on('loading_screen', (percent, message) => {
+        console.log(`⏳ [user ${userId}] WhatsApp syncing: ${percent}% - ${message}`);
+        broadcastSSE(userId, { type: 'syncing', percent, message });
+    });
+
     // ── Auth ────────────────────────────────────────────────
     client.on('authenticated', () => {
         console.log(`✅ [user ${userId}] WhatsApp Authenticated!`);
         s.currentQR = null;
+        s.currentPairingCode = null;
+        broadcastSSE(userId, { type: 'syncing', percent: 50, message: 'Authenticating with WhatsApp…' });
     });
 
     // ── Ready ───────────────────────────────────────────────
@@ -481,6 +510,7 @@ function attachHandlers(userId, s, client) {
         s.isInitializing = false;
         s.isHibernated   = false;
         s.currentQR      = null;
+        s.currentPairingCode = null;
         s.crashCount     = 0;
         s.lastError      = null;
         s.lastActivityAt = Date.now();
@@ -547,6 +577,7 @@ function attachHandlers(userId, s, client) {
         s.isConnected    = false;
         s.isInitializing = false;
         s.currentQR      = null;
+        s.currentPairingCode = null;
         scheduleRestart(userId, 8000);
     });
 
@@ -615,6 +646,7 @@ async function destroyClientForUser(userId) {
     s.isConnected = false;
     s.isInitializing = false;
     s.currentQR = null;
+    s.currentPairingCode = null;
     s.crashCount = 0;
     s.lastError = null;
 
@@ -629,15 +661,20 @@ async function destroyClientForUser(userId) {
         } catch (e) { /* client may already be closed or disconnected */ }
     }
 
-    await safeDestroyClient(s);
+    await safeDestroyClient(s, userId);
+    killBrowserProcessesForUser(userId);
 
     // Clean up saved auth directory on explicit disconnect so next connect is a clean fresh session
     const authDir = authDataPath(userId);
-    try {
-        if (fs.existsSync(authDir)) {
+    for (let i = 0; i < 5; i++) {
+        try {
+            if (!fs.existsSync(authDir)) break;
             fs.rmSync(authDir, { recursive: true, force: true });
+            break;
+        } catch (e) {
+            await new Promise(r => setTimeout(r, 200));
         }
-    } catch (e) { /* non-fatal */ }
+    }
 }
 
 /** Tears down every session — used by graceful shutdown. */
@@ -780,7 +817,7 @@ function getClient(userId) {
 
 function getStatus(userId) {
     const s = getSession(Number(userId), false);
-    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, hibernated: false };
+    if (!s) return { connected: false, phone: null, started: false, error: null, qr: null, pairingCode: null, hibernated: false };
     return {
         connected: s.isConnected,
         phone: s.isConnected && s.client?.info ? s.client.info.wid.user : null,
@@ -790,7 +827,8 @@ function getStatus(userId) {
         error: s.lastError || null,
         // Expose QR data URL so the frontend can fetch it via REST polling
         // when the SSE stream is blocked by a cloud load balancer / proxy.
-        qr: s.currentQR || null
+        qr: s.currentQR || null,
+        pairingCode: s.currentPairingCode || null
     };
 }
 
@@ -842,6 +880,48 @@ async function sendTextMessage(userId, phone, text) {
     return await s.client.sendMessage(`${digits}@c.us`, String(text));
 }
 
+async function sendMediaMessage(userId, phone, base64Data, mimetype = 'image/png', filename = 'qr-code.png', caption = '') {
+    const s = getSession(Number(userId), false);
+    if (!s || !s.isConnected || !s.client) {
+        const err = new Error('WhatsApp client is not connected');
+        err.code = 'WA_NOT_CONNECTED';
+        err.status = 409;
+        throw err;
+    }
+    const digits = String(phone).replace(/\D/g, '');
+    if (digits.length < 7 || digits.length > 15) {
+        const err = new Error('Invalid destination phone number');
+        err.status = 400;
+        throw err;
+    }
+    const cleanBase64 = String(base64Data || '').replace(/^data:[^;]+;base64,/, '');
+    const media = new MessageMedia(mimetype, cleanBase64, filename);
+    return await s.client.sendMessage(`${digits}@c.us`, media, caption ? { caption: String(caption) } : {});
+}
+
+async function requestPairingCodeForUser(userId, phoneNumber) {
+    userId = Number(userId);
+    const s = getSession(userId);
+    if (!s.client) {
+        initWhatsAppClient(userId);
+    }
+    let attempts = 0;
+    while ((!s.client || !s.client.pupPage) && attempts < 30) {
+        await new Promise(r => setTimeout(r, 500));
+        attempts++;
+    }
+    if (!s.client || typeof s.client.requestPairingCode !== 'function') {
+        throw new Error('WhatsApp client is initializing. Please wait a few seconds and try again.');
+    }
+    const cleanPhone = String(phoneNumber).replace(/\D/g, '');
+    if (cleanPhone.length < 10 || cleanPhone.length > 15) {
+        throw new Error('Please enter a valid phone number with country code (e.g. 919876543210)');
+    }
+    const code = await s.client.requestPairingCode(cleanPhone);
+    s.currentPairingCode = code;
+    return code;
+}
+
 module.exports = {
     initWhatsAppClient,
     destroyClientForUser,
@@ -851,6 +931,8 @@ module.exports = {
     getStatus,
     getSessionMetrics,
     sendTextMessage,
+    sendMediaMessage,
+    requestPairingCodeForUser,
     authDataPath,
     MAX_CONCURRENT_SESSIONS,
     MAX_SSE_CLIENTS_PER_USER,

@@ -33,9 +33,10 @@ const appointmentRoutes             = require('../routes/appointments');
 const { requireAuth, requireAdmin } = require('../middleware/auth');
 const { errorHandler }              = require('../utils/errors');
 const { addSSEClient, getSessionMetrics } = require('../services/whatsapp-client');
-const { getPersistHealth, getSchemaVersion, countUsers } = require('../services/database');
+const { getPersistHealth, getSchemaVersion, countUsers, getPublicProductById } = require('../services/database');
 const { requestMetrics, snapshot } = require('../utils/metrics');
 const { SESSION_SECRET_SOURCE } = require('./auth');
+const qrcode = require('qrcode');
 
 function createApp() {
     const app = express();
@@ -155,13 +156,17 @@ function createApp() {
     });
 
     // ─── Static assets — index.html is served explicitly below ──
+    const isProd = process.env.NODE_ENV === 'production';
     app.use(express.static(path.join(__dirname, '..', '..', 'public'), {
         index: false,
-        // Long cache for assets, but they have no content hash in their
-        // filenames, so a deploy would otherwise serve stale JS. etag +
-        // must-revalidate keeps correctness while still avoiding re-downloads.
-        maxAge: '1h',
-        setHeaders: (res) => res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate')
+        maxAge: isProd ? '1h' : 0,
+        setHeaders: (res) => {
+            if (isProd) {
+                res.setHeader('Cache-Control', 'public, max-age=3600, must-revalidate');
+            } else {
+                res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+            }
+        }
     }));
 
     // ─── Health checks ──────────────────────────────────────────
@@ -231,6 +236,338 @@ app.get('/health', (req, res) => {
 
     // ─── Unmatched API routes get a JSON 404, not the HTML redirect below ──
     app.use('/api', (req, res) => res.status(404).json({ success: false, error: 'Not found' }));
+
+    function escapeHtml(str) {
+        return String(str || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    // ─── Public 1-Tap Short Payment Link (/pay/:id) ────────────
+    app.get('/pay/:id', async (req, res) => {
+        const id = Number(req.params.id);
+        if (!Number.isSafeInteger(id) || id <= 0) {
+            return res.redirect('/');
+        }
+
+        const product = getPublicProductById(id);
+        if (!product || !product.is_active) {
+            res.setHeader('Content-Type', 'text/html; charset=utf-8');
+            return res.status(404).send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Link Inactive</title>
+  <style nonce="${res.locals.nonce || ''}">
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0b1120; color: #f8fafc; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 20px; box-sizing: border-box; }
+    .card { background: #1e293b; border: 1px solid #334155; border-radius: 16px; padding: 32px; max-width: 420px; width: 100%; text-align: center; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.4); }
+    h2 { margin: 12px 0 8px; font-size: 1.3rem; color: #f1f5f9; }
+    p { color: #94a3b8; font-size: 0.9rem; line-height: 1.5; margin: 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div style="font-size: 40px;">⚠️</div>
+    <h2>Product or Service Not Found</h2>
+    <p>This payment link is inactive or no longer available. Please reply on WhatsApp for an updated link.</p>
+  </div>
+</body>
+</html>`);
+        }
+
+        const paymentLink = (product.payment_link || product.url || '').trim();
+        if (!paymentLink) {
+            return res.status(404).send('No payment link configured for this product.');
+        }
+
+        // External HTTP/HTTPS payment gateway links (e.g. Stripe, Razorpay, Instamojo)
+        if (paymentLink.startsWith('http://') || paymentLink.startsWith('https://')) {
+            return res.redirect(302, paymentLink);
+        }
+
+        // UPI Intent payment flow
+        const numPrice = String(product.price || '').replace(/[^\d.]/g, '');
+        const formattedAmount = (numPrice && !isNaN(numPrice) && parseFloat(numPrice) > 0)
+            ? parseFloat(numPrice).toFixed(2)
+            : '';
+
+        const paMatch = paymentLink.match(/[?&]pa=([^&]+)/);
+        const upiId = paMatch ? decodeURIComponent(paMatch[1]).replace(/%40/g, '@').trim() : '';
+
+        const payeeName = (product.name || 'Payment').trim().slice(0, 50);
+        let upiUri = `upi://pay?pa=${upiId}&pn=${encodeURIComponent(payeeName)}&cu=INR&tn=${encodeURIComponent(payeeName)}`;
+        if (formattedAmount) {
+            upiUri += `&am=${formattedAmount}`;
+        }
+
+        let qrDataUrl = '';
+        try {
+            qrDataUrl = await qrcode.toDataURL(upiUri, {
+                width: 260,
+                margin: 2,
+                color: {
+                    dark: '#0f172a',
+                    light: '#ffffff'
+                }
+            });
+        } catch (qrErr) {
+            console.warn('Failed to generate QR for /pay/:id', qrErr.message);
+        }
+
+        const nonce = res.locals.nonce || '';
+        const displayPrice = formattedAmount ? `₹${Number(formattedAmount).toLocaleString('en-IN')}` : (product.price ? `₹${product.price}` : 'Pay via UPI');
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Pay ${escapeHtml(displayPrice)} for ${escapeHtml(product.name)}</title>
+  <style nonce="${nonce}">
+    :root {
+      --primary: #10b981;
+      --primary-hover: #059669;
+      --bg: #0b1120;
+      --card-bg: #1e293b;
+      --border: #334155;
+      --text: #f8fafc;
+      --text-muted: #94a3b8;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 16px;
+    }
+    .pay-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      max-width: 420px;
+      width: 100%;
+      padding: 28px 24px;
+      text-align: center;
+      box-shadow: 0 25px 50px -12px rgba(0,0,0,0.6);
+      position: relative;
+      overflow: hidden;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(16, 185, 129, 0.15);
+      color: #34d399;
+      padding: 4px 12px;
+      border-radius: 9999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      margin-bottom: 14px;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+    h1 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      color: #f1f5f9;
+      margin-bottom: 6px;
+      line-height: 1.3;
+    }
+    .desc {
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      margin-bottom: 18px;
+      line-height: 1.4;
+    }
+    .amount-box {
+      background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(6, 78, 59, 0.2));
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      border-radius: 14px;
+      padding: 16px 12px;
+      margin-bottom: 22px;
+    }
+    .amount-label {
+      font-size: 0.75rem;
+      color: #a7f3d0;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .amount-val {
+      font-size: 2.2rem;
+      font-weight: 800;
+      color: #34d399;
+      letter-spacing: -0.02em;
+    }
+    .btn-pay {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      width: 100%;
+      background: var(--primary);
+      color: #ffffff;
+      padding: 15px 20px;
+      border-radius: 12px;
+      font-size: 1.05rem;
+      font-weight: 700;
+      text-decoration: none;
+      cursor: pointer;
+      border: none;
+      transition: all 0.2s ease;
+      box-shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3);
+    }
+    .btn-pay:hover, .btn-pay:active {
+      background: var(--primary-hover);
+      transform: translateY(-1px);
+    }
+    .apps-row {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin: 12px 0 20px;
+      font-size: 0.75rem;
+      color: var(--text-muted);
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: #64748b;
+      font-size: 0.75rem;
+      margin: 20px 0 16px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .divider::before, .divider::after {
+      content: "";
+      flex: 1;
+      height: 1px;
+      background: #334155;
+    }
+    .qr-frame {
+      background: #ffffff;
+      padding: 12px;
+      border-radius: 12px;
+      display: inline-block;
+      margin-bottom: 12px;
+      box-shadow: 0 4px 6px -1px rgba(0,0,0,0.3);
+    }
+    .qr-frame img {
+      display: block;
+      width: 180px;
+      height: 180px;
+    }
+    .vpa-box {
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px dashed #475569;
+      border-radius: 10px;
+      padding: 10px 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 14px;
+    }
+    .vpa-text {
+      font-family: monospace;
+      font-size: 0.85rem;
+      color: #cbd5e1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .btn-copy {
+      background: #334155;
+      color: #f8fafc;
+      border: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 0.72rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-left: 8px;
+    }
+    .btn-copy:hover { background: #475569; }
+    .footer-note {
+      font-size: 0.72rem;
+      color: #64748b;
+      margin-top: 18px;
+      line-height: 1.4;
+    }
+  </style>
+</head>
+<body>
+  <div class="pay-container">
+    <div class="badge">🔒 Verified Instant Payment</div>
+    <h1>${escapeHtml(product.name)}</h1>
+    ${product.description ? `<p class="desc">${escapeHtml(product.description)}</p>` : ''}
+
+    <div class="amount-box">
+      <div class="amount-label">Exact Payable Amount</div>
+      <div class="amount-val">${escapeHtml(displayPrice)}</div>
+    </div>
+
+    <a href="${escapeHtml(upiUri)}" class="btn-pay" id="payBtn">
+      <span>📱 Pay with UPI App</span>
+    </a>
+    <div class="apps-row">
+      <span>Google Pay</span> • <span>PhonePe</span> • <span>Paytm</span> • <span>BHIM</span>
+    </div>
+
+    ${qrDataUrl ? `
+    <div class="divider">Or Scan to Pay</div>
+    <div class="qr-frame">
+      <img src="${qrDataUrl}" alt="UPI QR Code for ${escapeHtml(displayPrice)}" />
+    </div>
+    <div style="font-size: 0.78rem; color: var(--text-muted);">
+      Scan with any UPI App from another phone
+    </div>
+    ` : ''}
+
+    ${upiId ? `
+    <div class="vpa-box">
+      <span class="vpa-text" id="vpaText">${escapeHtml(upiId)}</span>
+      <button type="button" class="btn-copy" id="copyBtn">Copy</button>
+    </div>
+    ` : ''}
+
+    <div class="footer-note">
+      Direct payment to merchant. Zero platform surcharge.<br>
+      Pre-configured for exact amount of ${escapeHtml(displayPrice)}.
+    </div>
+  </div>
+
+  <script nonce="${nonce}">
+    const upiUri = ${JSON.stringify(upiUri)};
+    const upiId = ${JSON.stringify(upiId)};
+    // On mobile devices, automatically trigger the UPI app chooser
+    if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)) {
+      setTimeout(() => {
+        window.location.href = upiUri;
+      }, 300);
+    }
+    const copyBtn = document.getElementById('copyBtn');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', () => {
+        navigator.clipboard.writeText(upiId).then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => { copyBtn.textContent = 'Copy'; }, 2000);
+        });
+      });
+    }
+  </script>
+</body>
+</html>`);
+    });
 
     // ─── Pages ──────────────────────────────────────────────────
     const page = (name) => (req, res) => {

@@ -419,6 +419,37 @@ const MIGRATIONS = [
                 WHERE wa_message_id LIKE 'idem:%'
             `);
         }
+    },
+    {
+        version: 9,
+        name: 'add payment_link to products and payment_link_sent_at to crm_deals',
+        up: () => {
+            if (tableExists('products') && !tableHasColumn('products', 'payment_link')) {
+                db.run("ALTER TABLE products ADD COLUMN payment_link TEXT DEFAULT ''");
+            }
+            if (tableExists('crm_deals') && !tableHasColumn('crm_deals', 'payment_link_sent_at')) {
+                db.run('ALTER TABLE crm_deals ADD COLUMN payment_link_sent_at DATETIME');
+            }
+        }
+    },
+    {
+        version: 10,
+        name: 'sync existing upi payment links with product price am parameter',
+        up: () => {
+            if (!tableExists('products')) return;
+            const rows = queryAll("SELECT id, name, price, payment_link FROM products WHERE payment_link LIKE 'upi://%'");
+            for (const r of rows) {
+                const numPrice = String(r.price || '').replace(/[^\d.]/g, '');
+                if (numPrice && !isNaN(numPrice) && parseFloat(numPrice) > 0) {
+                    const paMatch = r.payment_link.match(/[?&]pa=([^&]+)/);
+                    if (paMatch) {
+                        const pa = decodeURIComponent(paMatch[1]);
+                        const newLink = `upi://pay?pa=${encodeURIComponent(pa)}&pn=${encodeURIComponent(r.name)}&cu=INR&tn=${encodeURIComponent(r.name)}&am=${parseFloat(numPrice).toFixed(2)}`;
+                        db.run('UPDATE products SET payment_link = ? WHERE id = ?', [newLink, r.id]);
+                    }
+                }
+            }
+        }
     }
 ];
 
@@ -1610,16 +1641,26 @@ function countProducts(userId) {
     return queryGet('SELECT COUNT(*) as count FROM products WHERE user_id = ?', [userId]).count;
 }
 
-function createProduct(userId, { name, description = '', price = '', category = '', url = '' }) {
+function getProduct(userId, id) {
+    return queryGet('SELECT * FROM products WHERE id = ? AND user_id = ?', [id, userId]);
+}
+
+function getPublicProductById(id) {
+    const numId = Number(id);
+    if (!Number.isSafeInteger(numId) || numId <= 0) return null;
+    return queryGet('SELECT id, user_id, name, description, price, category, url, payment_link, is_active FROM products WHERE id = ? AND is_active = 1', [numId]);
+}
+
+function createProduct(userId, { name, description = '', price = '', category = '', url = '', payment_link = '' }) {
     const { lastId } = runSql(
-        'INSERT INTO products (user_id, name, description, price, category, url) VALUES (?, ?, ?, ?, ?, ?)',
-        [userId, name, description, price, category, url]
+        'INSERT INTO products (user_id, name, description, price, category, url, payment_link) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [userId, name, description, price, category, url, payment_link]
     );
     return queryGet('SELECT * FROM products WHERE id = ?', [lastId]);
 }
 
 function updateProduct(userId, id, fields) {
-    const allowed = ['name', 'description', 'price', 'category', 'url', 'is_active'];
+    const allowed = ['name', 'description', 'price', 'category', 'url', 'payment_link', 'is_active'];
     const sets = [];
     const params = [];
     for (const [key, value] of Object.entries(fields)) {
@@ -1637,6 +1678,99 @@ function updateProduct(userId, id, fields) {
 
 function deleteProduct(userId, id) {
     return runSql('DELETE FROM products WHERE user_id = ? AND id = ?', [userId, id]);
+}
+
+/**
+ * Fuzzy-match a product by name for the AI payment-link tool.
+ *
+ * Tries exact match first (case-insensitive), then falls back to a LIKE
+ * prefix search. Only returns active products that have a payment_link.
+ */
+function getProductByName(userId, name) {
+    if (!name || typeof name !== 'string') return null;
+    const trimmed = name.trim();
+    if (trimmed === '') return null;
+
+    // 1. Exact case-insensitive match (most reliable)
+    let row = queryGet(
+        'SELECT * FROM products WHERE user_id = ? AND is_active = 1 AND LOWER(name) = LOWER(?) LIMIT 1',
+        [userId, trimmed]
+    );
+    if (row) return row;
+
+    // 2. LIKE prefix — "SEO" matches "SEO Package"
+    row = queryGet(
+        'SELECT * FROM products WHERE user_id = ? AND is_active = 1 AND LOWER(name) LIKE LOWER(?) LIMIT 1',
+        [userId, `%${trimmed}%`]
+    );
+    return row || null;
+}
+
+/**
+ * Records that the AI sent a payment link to a customer.
+ *
+ * Upserts the CRM deal: sets stage to at least 'proposal' (does not
+ * downgrade a deal already in 'negotiation' or 'won'), fills in
+ * deal_value from the product price, marks payment_link_sent_at, and
+ * logs a CRM activity.
+ */
+function recordPaymentLinkSent(userId, phone, { contactName = '', productName = '', price = 0 }) {
+    const existing = getCrmDealByPhone(userId, phone);
+    const numericPrice = parseFloat(price) || 0;
+
+    // Stages that are "further along" than proposal — don't downgrade them.
+    const advancedStages = ['negotiation', 'won'];
+
+    if (!existing) {
+        const deal = createCrmDeal(userId, {
+            phone,
+            contactName,
+            stage: 'proposal',
+            dealValue: numericPrice,
+            productInterest: productName,
+            source: 'whatsapp (AI)'
+        });
+        runSql(
+            'UPDATE crm_deals SET payment_link_sent_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?',
+            [userId, deal.id]
+        );
+    } else {
+        const newStage = advancedStages.includes(existing.stage) ? existing.stage : 'proposal';
+        const updates = {
+            stage: newStage,
+            product_interest: productName || existing.product_interest,
+        };
+        // Only fill deal_value if it's currently 0
+        if ((existing.deal_value === 0 || !existing.deal_value) && numericPrice > 0) {
+            updates.deal_value = numericPrice;
+        }
+        if (contactName && !existing.contact_name) {
+            updates.contact_name = contactName;
+        }
+        updateCrmDeal(userId, existing.id, updates);
+        runSql(
+            'UPDATE crm_deals SET payment_link_sent_at = CURRENT_TIMESTAMP WHERE user_id = ? AND id = ?',
+            [userId, existing.id]
+        );
+    }
+
+    addCrmActivity(
+        userId, phone, 'ai',
+        `AI sent payment link for ${productName}${numericPrice ? ` (${numericPrice})` : ''}`
+    );
+}
+
+/**
+ * Returns true if this tenant has at least one active product with a
+ * non-empty payment_link. Used to decide whether to offer the
+ * send_payment_link tool to the AI.
+ */
+function hasPaymentLinks(userId) {
+    const row = queryGet(
+        "SELECT COUNT(*) as count FROM products WHERE user_id = ? AND is_active = 1 AND payment_link != ''",
+        [userId]
+    );
+    return (row && row.count > 0);
 }
 
 // ─── CRM Deal Helpers ───────────────────────────────────────
@@ -2186,10 +2320,15 @@ module.exports = {
     getConversationPhones,
     getLeadStats,
     getProducts,
+    getProduct,
+    getPublicProductById,
     countProducts,
     createProduct,
     updateProduct,
     deleteProduct,
+    getProductByName,
+    recordPaymentLinkSent,
+    hasPaymentLinks,
     CRM_STAGES,
     getCrmDeals,
     getCrmDealByPhone,

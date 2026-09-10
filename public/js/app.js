@@ -55,7 +55,7 @@ async function api(endpoint, options = {}) {
         }
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'API request failed');
-        return data.data;
+        return data.data !== undefined ? data.data : data;
     } catch (err) {
         console.error(`API Error [${endpoint}]:`, err);
         throw err;
@@ -771,6 +771,9 @@ function renderDealCard(deal) {
     const priorityBadge = deal.priority
         ? `<span class="lead-badge ${(PRIORITY_META[deal.priority] || PRIORITY_META.low).cls}">${(PRIORITY_META[deal.priority] || PRIORITY_META.low).label()}</span>`
         : '';
+    const paymentBadge = deal.payment_link_sent_at
+        ? `<span class="lead-badge" style="background:var(--color-success, #22c55e);color:#fff" title="Payment link sent ${formatDate(deal.payment_link_sent_at)}">💳 Payment Sent</span>`
+        : '';
 
     return `
         <div class="deal-card" onclick="openDealModal(${jsAttr(deal.phone)})" role="button" tabindex="0"
@@ -782,6 +785,7 @@ function renderDealCard(deal) {
             ${deal.product_interest ? `<div class="deal-product">${Icon('package', 'icon-inline')}${escapeHtml(deal.product_interest)}</div>` : ''}
             <div class="deal-card-badges">
                 ${priorityBadge}
+                ${paymentBadge}
                 ${deal.interest_score ? `<span class="lead-badge lead-badge-score">${deal.interest_score}/100</span>` : ''}
                 ${followupDue ? `<span class="lead-badge lead-priority-high">${Icon('clock')} Follow up!</span>` : ''}
             </div>
@@ -797,7 +801,7 @@ async function openDealModal(phone) {
     const body = document.getElementById('dealModalBody');
     const title = document.getElementById('dealModalTitle');
 
-    backdrop.style.display = 'flex';
+    backdrop.classList.add('show');
     body.innerHTML = '<div class="empty-state">Loading deal…</div>';
 
     try {
@@ -841,7 +845,7 @@ async function openDealModal(phone) {
             <div class="modal-actions">
                 <button class="btn btn-primary btn-sm" onclick="saveDealFromModal(${deal.id})" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
                 <button class="btn btn-danger btn-sm" onclick="deleteDealFromModal(${deal.id})" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
-                <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}</small>
+                <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}${deal.payment_link_sent_at ? ` · 💳 Payment link sent ${formatDate(deal.payment_link_sent_at)}` : ''}</small>
             </div>
 
             ${analysis ? `
@@ -883,7 +887,7 @@ function renderActivity(act) {
 }
 
 function closeDealModal() {
-    document.getElementById('dealModalBackdrop').style.display = 'none';
+    document.getElementById('dealModalBackdrop').classList.remove('show');
     currentDealPhone = null;
 }
 
@@ -962,38 +966,89 @@ async function loadBusiness() {
     }
 }
 
+let CURRENT_PRODUCTS = [];
+
+function extractUpiId(paymentLink) {
+    if (!paymentLink) return '';
+    if (typeof paymentLink !== 'string') return '';
+    if (paymentLink.startsWith('upi://')) {
+        try {
+            const parsed = new URL(paymentLink);
+            return parsed.searchParams.get('pa') || paymentLink;
+        } catch (e) {
+            const match = paymentLink.match(/[?&]pa=([^&]+)/);
+            return match ? decodeURIComponent(match[1]) : paymentLink;
+        }
+    }
+    return paymentLink;
+}
+
+function openEditProductModal(id) {
+    const product = CURRENT_PRODUCTS.find(p => String(p.id) === String(id));
+    if (!product) return;
+    document.getElementById('editProdId').value = product.id;
+    document.getElementById('editProdName').value = product.name || '';
+    document.getElementById('editProdPrice').value = product.price || '';
+    document.getElementById('editProdCategory').value = product.category || '';
+    document.getElementById('editProdDesc').value = product.description || '';
+    document.getElementById('editProdUrl').value = product.url || '';
+    // Show only the clean UPI ID in the input box if it's a UPI link
+    document.getElementById('editProdPaymentLink').value = extractUpiId(product.payment_link) || '';
+
+    const backdrop = document.getElementById('productModalBackdrop');
+    if (backdrop) backdrop.classList.add('show');
+}
+
+function closeEditProductModal() {
+    const backdrop = document.getElementById('productModalBackdrop');
+    if (backdrop) backdrop.classList.remove('show');
+}
+
 function renderProductList(products) {
+    CURRENT_PRODUCTS = products || [];
     const container = document.getElementById('productList');
     if (!container) return;
 
-    if (products.length === 0) {
+    if (CURRENT_PRODUCTS.length === 0) {
         container.innerHTML = '<p style="color:var(--color-text-secondary);font-size:0.85rem">No products yet — add your catalog above so the AI can quote it to customers.</p>';
         return;
     }
 
-    container.innerHTML = products.map(p => `
+    container.innerHTML = CURRENT_PRODUCTS.map(p => {
+        const isUpi = p.payment_link && p.payment_link.startsWith('upi://');
+        const upiId = isUpi ? extractUpiId(p.payment_link) : '';
+        return `
         <div class="product-row ${p.is_active ? '' : 'disabled'}">
             <div class="product-row-info">
                 <strong>${escapeHtml(p.name)}</strong>
                 ${p.price ? `<span class="lead-badge lead-badge-score">${escapeHtml(p.price)}</span>` : ''}
                 ${p.category ? `<span class="lead-badge lead-badge-category">${escapeHtml(p.category)}</span>` : ''}
+                ${p.payment_link ? (isUpi
+                    ? `<span class="lead-badge" style="background:var(--color-success, #22c55e);color:#fff;font-size:0.7rem">📱 UPI: ${escapeHtml(upiId)}</span>`
+                    : `<span class="lead-badge" style="background:var(--color-success, #22c55e);color:#fff;font-size:0.7rem">💳 Payment Link</span>`) : ''}
                 ${p.description ? `<div class="product-row-desc">${escapeHtml(p.description)}</div>` : ''}
                 ${p.url ? `<div class="product-row-desc"><a href="${escapeHtml(p.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.url)}</a></div>` : ''}
+                ${p.payment_link ? (isUpi
+                    ? `<div class="product-row-desc">📱 <strong>UPI ID:</strong> <code style="font-size:0.8rem;background:var(--color-bg-secondary,#f1f5f9);padding:1px 4px;border-radius:4px">${escapeHtml(upiId)}</code></div>`
+                    : `<div class="product-row-desc">💳 <a href="${escapeHtml(p.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(p.payment_link)}</a></div>`) : ''}
             </div>
             <div class="rule-actions">
-                <button class="btn btn-sm btn-secondary" onclick="toggleProduct(${p.id}, ${p.is_active ? 0 : 1})" title="${p.is_active ? 'Hide from AI' : 'Show to AI'}" type="button">${Icon(p.is_active ? 'pause' : 'play')}</button>
-                <button class="btn btn-sm btn-danger" onclick="deleteProductRow(${p.id})" title="Delete" type="button">${Icon('trash-2')}</button>
+                <button class="btn btn-sm btn-secondary view-product-btn" data-id="${p.id}" title="View details & edit" type="button">${Icon('eye')}</button>
+                <button class="btn btn-sm btn-secondary toggle-product-btn" data-id="${p.id}" data-active="${p.is_active ? 0 : 1}" title="${p.is_active ? 'Hide from AI' : 'Show to AI'}" type="button">${Icon(p.is_active ? 'pause' : 'play')}</button>
+                <button class="btn btn-sm btn-danger delete-product-btn" data-id="${p.id}" title="Delete" type="button">${Icon('trash-2')}</button>
             </div>
         </div>
-    `).join('');
+        `;
+    }).join('');
 }
 
 async function toggleProduct(id, newState) {
     try {
         await api(`/api/products/${id}`, { method: 'PUT', body: JSON.stringify({ is_active: newState }) });
+        showToast(newState == 1 ? 'Product enabled' : 'Product hidden from AI', 'success');
         loadBusiness();
     } catch (err) {
-        showToast('Failed to update product', 'error');
+        showToast(err.message || 'Failed to update product', 'error');
     }
 }
 
@@ -1001,12 +1056,193 @@ async function deleteProductRow(id) {
     if (!confirm('Remove this product from the catalog?')) return;
     try {
         await api(`/api/products/${id}`, { method: 'DELETE' });
-        showToast('Product removed', 'success');
+        showToast('Product removed from catalog', 'success');
         loadBusiness();
     } catch (err) {
-        showToast('Failed to remove product', 'error');
+        showToast(err.message || 'Failed to remove product', 'error');
     }
 }
+
+function openViewProductModal(id) {
+    const product = CURRENT_PRODUCTS.find(p => String(p.id) === String(id));
+    if (!product) return;
+
+    const body = document.getElementById('viewProductModalBody');
+    if (!body) return;
+
+    const row = (label, value) => `
+        <div class="view-product-detail">
+            <span class="view-product-label">${escapeHtml(label)}</span>
+            <span class="view-product-value">${value}</span>
+        </div>`;
+
+    const linkVal = (url) => url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(url)}</a>` : '<span style="color:var(--color-text-secondary)">—</span>';
+
+    const statusBadge = product.is_active
+        ? '<span class="view-product-status active">● Active (Enabled for AI)</span>'
+        : '<span class="view-product-status paused">● Paused (Hidden from AI)</span>';
+
+    const isUpi = product.payment_link && product.payment_link.startsWith('upi://');
+    const upiId = isUpi ? extractUpiId(product.payment_link) : '';
+
+    const paymentLinkCard = product.payment_link ? `
+        <div class="view-payment-card">
+            <div class="view-payment-card-title">
+                <span>${isUpi ? '📱 UPI Instant Payment' : '💳 Direct Payment Link'}</span>
+                <span class="lead-badge" style="background:var(--color-success, #22c55e);color:#fff;font-size:0.68rem">Active</span>
+            </div>
+            <div class="view-payment-card-link">
+                <div>
+                    ${isUpi ? `<div style="font-size:0.95rem;font-weight:600;color:var(--color-text-primary)">UPI ID: <span style="color:var(--color-primary,#10b981)">${escapeHtml(upiId)}</span></div>` : ''}
+                    <div style="font-size:0.75rem;color:var(--color-text-secondary);word-break:break-all;margin-top:2px">
+                        ${isUpi ? `Auto-generated link: ${escapeHtml(product.payment_link)}` : `<a href="${escapeHtml(product.payment_link)}" target="_blank" rel="noopener noreferrer">${escapeHtml(product.payment_link)}</a>`}
+                    </div>
+                </div>
+                <div style="display:flex;gap:5px;flex-shrink:0;align-items:center">
+                    <button type="button" class="btn btn-xs btn-secondary" id="copyPaymentLinkBtn">${isUpi ? 'Copy UPI ID' : 'Copy Link'}</button>
+                    <button type="button" class="btn btn-xs btn-secondary" id="toggleQrBtn">📷 QR Code</button>
+                </div>
+            </div>
+            <div id="viewQrSection" style="display:none"></div>
+            <div class="view-payment-card-note">
+                ✨ AI automatically sends this payment option to customers inquiring on WhatsApp.
+            </div>
+        </div>
+    ` : `
+        <div class="view-payment-card empty">
+            <div class="view-payment-card-title" style="color:var(--color-text-secondary)">
+                <span>📱 UPI / Payment Setup</span>
+                <span class="lead-badge" style="background:#e2e8f0;color:#64748b;font-size:0.68rem">Not Added</span>
+            </div>
+            <p style="font-size:0.8rem;color:var(--color-text-secondary);margin:4px 0 0">
+                No UPI ID or payment link added. Click <strong>Edit Product</strong> below to add your UPI ID.
+            </p>
+        </div>
+    `;
+
+    body.innerHTML = `
+        ${row('Service Name', `<strong>${escapeHtml(product.name)}</strong>`)}
+        ${row('Price', product.price ? `<span class="lead-badge lead-badge-score">${escapeHtml(product.price)}</span>` : '<span style="color:var(--color-text-secondary)">Not specified</span>')}
+        ${row('Category', escapeHtml(product.category || 'General'))}
+        ${row('Description', escapeHtml(product.description || 'No description provided.'))}
+        ${row('Product URL', linkVal(product.url))}
+        ${row('AI Status', statusBadge)}
+        ${paymentLinkCard}
+        <div class="view-product-actions">
+            <button type="button" class="btn btn-secondary" id="viewProductCloseBtn">Close</button>
+            <button type="button" class="btn btn-secondary" id="sendTestProductBtn" data-id="${product.id}" title="Send test preview message to your WhatsApp">
+                📲 Send Test to WhatsApp
+            </button>
+            <button type="button" class="btn btn-primary" id="viewToEditBtn" data-id="${product.id}">
+                ${Icon('edit')} Edit Product
+            </button>
+        </div>
+    `;
+
+    // Copy payment link / UPI ID button
+    document.getElementById('copyPaymentLinkBtn')?.addEventListener('click', () => {
+        if (product.payment_link) {
+            const textToCopy = isUpi ? upiId : product.payment_link;
+            navigator.clipboard.writeText(textToCopy).then(() => {
+                showToast(isUpi ? 'UPI ID copied to clipboard!' : 'Payment link copied to clipboard!', 'success');
+            }).catch(() => {
+                showToast('Failed to copy', 'error');
+            });
+        }
+    });
+
+    // Toggle QR code display
+    document.getElementById('toggleQrBtn')?.addEventListener('click', async () => {
+        const qrContainer = document.getElementById('viewQrSection');
+        if (!qrContainer) return;
+        if (qrContainer.style.display !== 'none') {
+            qrContainer.style.display = 'none';
+            return;
+        }
+
+        if (qrContainer.innerHTML.trim() === '' || qrContainer.querySelector('.view-qr-box') === null) {
+            qrContainer.innerHTML = '<div style="text-align:center;padding:12px;font-size:0.85rem;color:var(--color-text-secondary)">Generating QR code…</div>';
+            qrContainer.style.display = 'block';
+            try {
+                const res = await api(`/api/products/${product.id}/qr`);
+                const qrImage = (res && res.qr) ? res.qr : (res && res.data && res.data.qr ? res.data.qr : null);
+                if (qrImage) {
+                    qrContainer.innerHTML = `
+                        <div class="view-qr-box">
+                            <img src="${qrImage}" alt="Payment QR Code">
+                            <div class="view-qr-meta">
+                                Scan with <strong>GPay, PhonePe, Paytm, or BHIM</strong><br>
+                                <strong>${escapeHtml(product.name)} ${product.price ? `(${escapeHtml(product.price)})` : ''}</strong>
+                            </div>
+                            <a href="${qrImage}" download="QR-${escapeHtml(product.name).replace(/[^a-zA-Z0-9]/g, '_')}.png" class="btn btn-xs btn-secondary" style="text-decoration:none">
+                                ⬇️ Download QR Image
+                            </a>
+                        </div>
+                    `;
+                } else {
+                    qrContainer.innerHTML = '<p style="color:var(--color-danger);font-size:0.8rem;padding:8px">Failed to load QR code</p>';
+                }
+            } catch (err) {
+                qrContainer.innerHTML = `<p style="color:var(--color-danger);font-size:0.8rem;padding:8px">${escapeHtml(err.message || 'Error generating QR code')}</p>`;
+            }
+        } else {
+            qrContainer.style.display = 'block';
+        }
+    });
+
+    // Send test preview to WhatsApp
+    document.getElementById('sendTestProductBtn')?.addEventListener('click', async () => {
+        const phoneInput = prompt('Enter WhatsApp destination number (e.g. 9876543210 or 919876543210):\n\nLeave blank to send to your own connected WhatsApp:');
+        if (phoneInput === null) return; // User cancelled
+        const phone = phoneInput.trim();
+
+        const btn = document.getElementById('sendTestProductBtn');
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = 'Sending…';
+
+        try {
+            const res = await api(`/api/products/${product.id}/test-send`, {
+                method: 'POST',
+                body: JSON.stringify({ phone })
+            });
+            const msg = (res && (res.message || res.data?.message)) || 'Test preview message sent to WhatsApp!';
+            showToast(msg, 'success');
+        } catch (err) {
+            const errMsg = err.message || '';
+            if (errMsg.includes('not connected')) {
+                showToast('WhatsApp is not connected. Connect your WhatsApp in Settings → WhatsApp QR first.', 'error');
+            } else {
+                showToast(errMsg || 'Failed to send test message. Check WhatsApp connection.', 'error');
+            }
+        } finally {
+            btn.disabled = false;
+            btn.textContent = origText;
+        }
+    });
+
+    // Wire up modal-internal buttons
+    document.getElementById('viewToEditBtn')?.addEventListener('click', () => {
+        closeViewProductModal();
+        openEditProductModal(product.id);
+    });
+    document.getElementById('viewProductCloseBtn')?.addEventListener('click', closeViewProductModal);
+
+    const backdrop = document.getElementById('viewProductModalBackdrop');
+    if (backdrop) backdrop.classList.add('show');
+}
+
+function closeViewProductModal() {
+    const backdrop = document.getElementById('viewProductModalBackdrop');
+    if (backdrop) backdrop.classList.remove('show');
+}
+
+window.openEditProductModal = openEditProductModal;
+window.closeEditProductModal = closeEditProductModal;
+window.openViewProductModal = openViewProductModal;
+window.closeViewProductModal = closeViewProductModal;
+window.toggleProduct = toggleProduct;
+window.deleteProductRow = deleteProductRow;
 
 function renderBusinessProfile(profile) {
     const container = document.getElementById('businessProfileResult');
@@ -1406,13 +1642,13 @@ function openOutreachModal() {
     document.getElementById('outreachComposeView').style.display = '';
     document.getElementById('outreachProgressView').style.display = 'none';
     document.getElementById('outreachSendBtn').disabled = false;
-    document.getElementById('outreachModalBackdrop').style.display = 'flex';
+    document.getElementById('outreachModalBackdrop').classList.add('show');
     if (typeof hydrateIcons === 'function') hydrateIcons(document.getElementById('outreachModalBackdrop'));
 }
 
 function closeOutreachModal() {
     if (OUTREACH_POLL_TIMER) { clearTimeout(OUTREACH_POLL_TIMER); OUTREACH_POLL_TIMER = null; }
-    document.getElementById('outreachModalBackdrop').style.display = 'none';
+    document.getElementById('outreachModalBackdrop').classList.remove('show');
 }
 
 async function submitOutreach() {
@@ -1889,6 +2125,7 @@ function startStatusPolling() {
                 stopStatusPolling();
             } else if (s.qr) {
                 applyConnectionState({ type: 'qr', data: s.qr });
+                if (s.pairingCode) applyConnectionState({ type: 'code', data: s.pairingCode });
             } else if (s.error) {
                 applyConnectionState({ type: 'error', data: s.error });
             } else if (s.initializing) {
@@ -1937,10 +2174,13 @@ function applyConnectionState(data) {
             <p>Phone: ${escapeHtml(data.phone || '')}</p>`;
 
     } else if (data.type === 'disconnected' || data.type === 'error') {
+        const syncBanner = document.getElementById('syncBanner');
+        if (syncBanner) syncBanner.style.display = 'none';
         hide(qrLoading); hide(qrImage); hide(qrSuccess);
         if (statusDot)  statusDot.className  = 'status-dot error';
-        if (statusText) statusText.textContent = 'Disconnected';
-        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}Not connected</p>`;
+        if (statusText) statusText.textContent = data.type === 'error' ? 'Connection Error' : 'Disconnected';
+        const errorMsg = data.data || (data.type === 'error' ? 'Connection Error' : 'Not connected');
+        if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-error)">${Icon('x-circle', 'icon-inline')}${escapeHtml(errorMsg)}</p>`;
 
         if (qrContainer && !document.getElementById('qrReconnectBtnContainer')) {
             const reconnectDiv = document.createElement('div');
@@ -1952,8 +2192,11 @@ function applyConnectionState(data) {
             const waAllowed = CURRENT_USER && (CURRENT_USER.role === 'admin' || CURRENT_USER.wa_enabled);
 
             if (waAllowed) {
+                const titleText = data.type === 'error' ? 'WhatsApp Connection Issue' : 'WhatsApp is Disconnected';
+                const detailText = data.data ? `<p style="color:var(--color-text-secondary);font-size:0.85rem;margin-bottom:12px;max-width:380px;margin-left:auto;margin-right:auto;">${escapeHtml(data.data)}</p>` : '';
                 reconnectDiv.innerHTML = `
-                    <p style="color:var(--color-error);font-weight:600;margin-bottom:12px;">${Icon('x-circle', 'icon-inline')} WhatsApp is Disconnected</p>
+                    <p style="color:var(--color-error);font-weight:600;margin-bottom:8px;">${Icon('x-circle', 'icon-inline')} ${escapeHtml(titleText)}</p>
+                    ${detailText}
                     <button class="btn btn-primary btn-sm" id="reconnectWaBtn" type="button" style="display:inline-flex;align-items:center;gap:6px;">${Icon('refresh-cw', 'icon-inline')} Connect &amp; Show QR Code</button>
                 `;
                 qrContainer.appendChild(reconnectDiv);
@@ -2350,7 +2593,8 @@ document.addEventListener('DOMContentLoaded', async () => {
                     price:       document.getElementById('prodPrice').value.trim(),
                     category:    document.getElementById('prodCategory').value.trim(),
                     description: document.getElementById('prodDesc').value.trim(),
-                    url:         document.getElementById('prodUrl').value.trim()
+                    url:          document.getElementById('prodUrl').value.trim(),
+                    payment_link: document.getElementById('prodPaymentLink').value.trim()
                 })
             });
             showToast('Added to catalog!', 'success');
@@ -2360,6 +2604,90 @@ document.addEventListener('DOMContentLoaded', async () => {
             showToast('Failed to add product', 'error');
         }
     });
+
+
+
+    // ── Product catalog list event delegation ────────────────
+    document.getElementById('productList')?.addEventListener('click', async (e) => {
+        const viewBtn = e.target.closest('.view-product-btn');
+        if (viewBtn) {
+            openViewProductModal(viewBtn.dataset.id);
+            return;
+        }
+        const editBtn = e.target.closest('.edit-product-btn');
+        if (editBtn) {
+            openEditProductModal(editBtn.dataset.id);
+            return;
+        }
+        const toggleBtn = e.target.closest('.toggle-product-btn');
+        if (toggleBtn) {
+            await toggleProduct(toggleBtn.dataset.id, toggleBtn.dataset.active);
+            return;
+        }
+        const deleteBtn = e.target.closest('.delete-product-btn');
+        if (deleteBtn) {
+            await deleteProductRow(deleteBtn.dataset.id);
+            return;
+        }
+    });
+
+    // ── Edit product form submission ────────────────────────
+    document.getElementById('editProductForm')?.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const id = document.getElementById('editProdId').value;
+        const name = document.getElementById('editProdName').value.trim();
+        if (!id || !name) return;
+
+        const btn = document.getElementById('saveEditProductBtn');
+        btn.disabled = true;
+        btn.textContent = 'Saving…';
+        try {
+            await api(`/api/products/${id}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    name,
+                    price:        document.getElementById('editProdPrice').value.trim(),
+                    category:     document.getElementById('editProdCategory').value.trim(),
+                    description:  document.getElementById('editProdDesc').value.trim(),
+                    url:          document.getElementById('editProdUrl').value.trim(),
+                    payment_link: document.getElementById('editProdPaymentLink').value.trim()
+                })
+            });
+            showToast('Product updated successfully!', 'success');
+            closeEditProductModal();
+            loadBusiness();
+        } catch (err) {
+            showToast(err.message || 'Failed to update product', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.textContent = 'Save Changes';
+        }
+    });
+
+    // ── Edit product modal close handlers ───────────────────
+    document.getElementById('productModalClose')?.addEventListener('click', closeEditProductModal);
+    document.getElementById('editProductCancelBtn')?.addEventListener('click', closeEditProductModal);
+    document.getElementById('productModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeEditProductModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.getElementById('productModalBackdrop')?.classList.contains('show')) {
+            closeEditProductModal();
+        }
+    });
+    document.getElementById('productModal')?.addEventListener('click', (e) => e.stopPropagation());
+
+    // ── View product modal close handlers ────────────────────
+    document.getElementById('viewProductModalClose')?.addEventListener('click', closeViewProductModal);
+    document.getElementById('viewProductModalBackdrop')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeViewProductModal();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.getElementById('viewProductModalBackdrop')?.classList.contains('show')) {
+            closeViewProductModal();
+        }
+    });
+    document.getElementById('viewProductModal')?.addEventListener('click', (e) => e.stopPropagation());
 
     document.getElementById('analyzeBusinessBtn')?.addEventListener('click', analyzeBusiness);
 
@@ -2563,6 +2891,23 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
     });
 
+    document.getElementById('resetWaSessionBtn')?.addEventListener('click', async () => {
+        const btn = document.getElementById('resetWaSessionBtn');
+        btn.disabled = true;
+        btn.textContent = 'Resetting…';
+        try {
+            await api('/api/whatsapp/disconnect', { method: 'POST' });
+            showToast('Cleared old session. Starting fresh WhatsApp client...', 'info');
+            applyConnectionState({ type: 'loading' });
+            await api('/api/whatsapp/connect', { method: 'POST' });
+        } catch (err) {
+            showToast(err.message || 'Failed to reset WhatsApp session', 'error');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = `${Icon('refresh-cw', 'icon-inline')} Reset &amp; Get Fresh QR Code`;
+        }
+    });
+
     document.getElementById('disconnectBtn')?.addEventListener('click', async () => {
         if (!confirm('Disconnect this WhatsApp number? You can reconnect any time by scanning a new QR code.')) return;
         try {
@@ -2582,8 +2927,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // ── Auto-refresh active section every 15 s ───────────────────
     setInterval(() => {
         // Skip background refresh if user is currently typing in an input or modal is open
-        const isEditing = document.activeElement && ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName);
-        const isModalOpen = document.querySelector('.modal-backdrop[style*="display: block"], .modal-backdrop:not([style*="display: none"]):not([style*="display:none"])');
+        const isModalOpen = document.querySelector('.modal-backdrop.show');
         if (isEditing || isModalOpen) return;
 
         if (currentSection === 'dashboard') {

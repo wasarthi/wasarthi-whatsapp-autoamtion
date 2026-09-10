@@ -7,7 +7,7 @@ const { callGeminiWithRetry, extractText, parseJsonResponse } = require('./gemin
 const MAX_PRODUCTS_IN_CONTEXT = 40;
 
 // ─── Raw business info (what the owner typed in Settings) ───
-function getBusinessInfo(userId) {
+function getBusinessInfo(userId, activeOnly = false) {
     return {
         name:            getSetting(userId, 'business_name') || '',
         website:         getSetting(userId, 'business_website') || '',
@@ -16,7 +16,7 @@ function getBusinessInfo(userId) {
         targetCustomers: getSetting(userId, 'business_target_customers') || '',
         offers:          getSetting(userId, 'business_offers') || '',
         currency:        getSetting(userId, 'business_currency') || '₹',
-        products:        getProducts(userId, true)
+        products:        getProducts(userId, activeOnly)
     };
 }
 
@@ -35,7 +35,7 @@ function hasBusinessInfo(info) {
  * containing a newline could otherwise forge a directive line.
  */
 function getBusinessContext(userId) {
-    const info = getBusinessInfo(userId);
+    const info = getBusinessInfo(userId, true);
     if (!hasBusinessInfo(info)) return '';
 
     const flat = (v) => String(v == null ? '' : v).replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
@@ -52,10 +52,11 @@ function getBusinessContext(userId) {
         lines.push('Products / Services catalog:');
         for (const p of info.products.slice(0, MAX_PRODUCTS_IN_CONTEXT)) {
             const bits = [flat(p.name)];
-            if (p.price)       bits.push(`price: ${flat(p.price)}`);
-            if (p.category)    bits.push(`category: ${flat(p.category)}`);
-            if (p.description) bits.push(flat(p.description));
-            if (p.url)         bits.push(`link: ${flat(p.url)}`);
+            if (p.price)        bits.push(`price: ${flat(p.price)}`);
+            if (p.category)     bits.push(`category: ${flat(p.category)}`);
+            if (p.description)  bits.push(flat(p.description));
+            if (p.url)          bits.push(`link: ${flat(p.url)}`);
+            if (p.payment_link) bits.push(`payment_link: ${flat(p.payment_link)}`);
             lines.push(`  - ${bits.join(' | ')}`);
         }
         if (info.products.length > MAX_PRODUCTS_IN_CONTEXT) {

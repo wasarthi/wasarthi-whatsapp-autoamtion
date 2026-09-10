@@ -34,7 +34,24 @@ scripts/load-test-*.js
 PROJECT_DEPLOYMENT_ANALYSIS.md
 WHATSAPP_AUTOMATION_COMPLETE_SYSTEM_DOCUMENTATION.md
 BUG_REPORT.md
+AWS_PRODUCTION_DEPLOYMENT.md
+FINAL_PRODUCTION_AUDIT.md
+DEPLOY.md
+CHECKLIST.md
+RELEASE_CHECKLIST.md
+README.md
+
+# CI/CD and deployment configs (not needed at runtime)
+.github/
+render.yaml
+Caddyfile
+docker-compose*.yml
+deploy.zip
+
+# SSH keys / secrets (must never be in the image)
+keys/
 
 # Misc dev files
 opencode.json
 test-data/
+create-demo-admin.js
