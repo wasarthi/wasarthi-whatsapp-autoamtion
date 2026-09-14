@@ -28,12 +28,73 @@ async function checkAuth() {
         if (nameEl)   nameEl.textContent = label;
         if (avatarEl) avatarEl.textContent = label.slice(0, 2).toUpperCase();
         if (adminNav) adminNav.style.display = CURRENT_USER.role === 'admin' ? '' : 'none';
+        applyVerticalContext(CURRENT_USER.business_vertical);
 
         return true;
     } catch (err) {
         window.location.href = '/login';
         return false;
     }
+}
+
+// The vertical is read from the authenticated identity. This changes only
+// terminology and visibility; it is never an authorization decision.
+function applyVerticalContext(vertical) {
+    const context = window.VerticalContext && window.VerticalContext.set(vertical);
+    if (!context) return;
+    const setText = (id, text) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = text;
+    };
+    const healthcare = window.VerticalContext.isHealthcare();
+    setText('navInsightsLabel', context.labels.insights);
+    setText('dashboardInsightsGroupLabel', context.labels.inquiries);
+    setText('dashboardInterestedLabel', healthcare ? 'Interested Inquiries' : 'Interested Leads');
+    setText('dashboardPriorityLabel', healthcare ? 'High-priority Inquiries' : 'High Priority');
+    setText('dashboardWorkflowGroupLabel', healthcare ? 'Inquiry Workflow' : 'Sales Pipeline');
+    setText('dashboardWorkflowValueLabel', healthcare ? 'Service Value' : 'Pipeline Value');
+    setText('dashboardWorkflowOpenLabel', healthcare ? 'Open Inquiries' : 'Open Deals');
+    setText('dashboardWorkflowResolvedLabel', healthcare ? 'Resolved Inquiries' : 'Deals Won');
+    setText('leads-heading', context.labels.insights);
+    setText('insightsSubtitle', healthcare
+        ? 'AI-powered communication summaries, inquiry engagement and administrative follow-ups for every conversation'
+        : 'AI-powered summaries, interest detection, issues and priorities for every conversation');
+    setText('insightsAnalyzedLabel', healthcare ? 'Conversations Reviewed' : 'Analyzed Chats');
+    setText('insightsInterestedLabel', healthcare ? 'Interested Inquiries' : 'Interested');
+    setText('insightsPriorityLabel', healthcare ? 'High-priority Inquiries' : 'High Priority');
+    setText('insightsAwaitingLabel', healthcare ? 'Awaiting Review' : 'Awaiting Analysis');
+    setText('interestFilterAll', healthcare ? 'All Inquiry Levels' : 'All Interest Levels');
+    setText('interestFilterInterested', healthcare ? 'Interested Inquiry' : 'Interested');
+    setText('interestFilterNotInterested', healthcare ? 'Not Interested' : 'Not Interested');
+    setText('priorityFilterAll', healthcare ? 'All Inquiry Priorities' : 'All Priorities');
+    setText('analyzeAllLabel', healthcare ? 'Analyze Conversations' : 'Analyze All Chats');
+    setText('catalogHeading', healthcare ? 'Services Catalog' : 'Products & Services Catalog');
+    setText('businessProfileHeading', context.labels.profile);
+    setText('businessProfileNote', healthcare
+        ? 'Let the AI prepare a safe communication and appointment-workflow brief from the services you provide. It supports administrative replies and inquiry follow-up.'
+        : 'Let the AI study your business and generate a sales brief — positioning, selling points, a ready-to-send pitch, and objection handling. This brief also sharpens auto-replies and lead scoring.');
+    setText('navCrmLabel', healthcare ? 'Inquiry Management' : 'CRM');
+    setText('crm-heading', healthcare ? 'Inquiry Management' : 'CRM Pipeline');
+    setText('crmSubtitle', healthcare ? 'Organize communication follow-ups and service inquiries for your team' : 'Track every conversation as a deal — auto-filled by AI, managed by you');
+    setText('crmValueLabel', healthcare ? 'Service Value' : 'Pipeline Value');
+    setText('crmOpenLabel', healthcare ? 'Open Inquiries' : 'Open Deals');
+    setText('crmResolvedLabel', healthcare ? 'Resolved Inquiries' : 'Won');
+    setText('crmStageChartLabel', healthcare ? 'Open Inquiries by Status' : 'Open Deals by Stage');
+    setText('crmValueChartLabel', healthcare ? 'Service Value by Status' : 'Pipeline Value by Stage');
+    setText('crmInterestChartLabel', healthcare ? 'Inquiry Engagement Mix' : 'Lead Interest Mix');
+    setText('addWorkflowItemLabel', healthcare ? 'Add Inquiry' : 'Add Deal');
+    setText('addWorkflowItemTitle', healthcare ? 'Add Inquiry Manually' : 'Add Deal Manually');
+    setText('saveWorkflowItemLabel', healthcare ? 'Add Inquiry' : 'Add Deal');
+    setText('dealValueFieldLabel', healthcare ? 'Service Value (optional)' : 'Deal Value');
+    setText('dealStageFieldLabel', healthcare ? 'Inquiry Status' : 'Stage');
+    setText('dealProductFieldLabel', healthcare ? 'Service / Inquiry' : 'Product / Service');
+    document.querySelectorAll('#dealStage option').forEach(option => {
+        option.textContent = healthcare ? workflowStageLabel(option.value) : (STAGE_META[option.value]?.text || option.value);
+    });
+    setText('crmHelperText', healthcare ? 'Use this shared workspace for administrative inquiries and follow-ups. Contacts are not automatically treated as patients.' : 'Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.');
+
+    document.querySelectorAll('.vertical-sales-only').forEach(el => { el.style.display = context.salesPipeline ? '' : 'none'; });
+    document.querySelectorAll('.vertical-healthcare-only').forEach(el => { el.style.display = healthcare ? 'flex' : 'none'; });
 }
 
 async function logout() {
@@ -44,8 +105,11 @@ async function logout() {
 // ─── API Client ─────────────────────────────────────────────
 async function api(endpoint, options = {}) {
     try {
+        const headers = { ...options.headers };
+        // Let the browser add multipart boundaries for document uploads.
+        if (!(options.body instanceof FormData) && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
         const res = await fetch(`${API}${endpoint}`, {
-            headers: { 'Content-Type': 'application/json', ...options.headers },
+            headers,
             ...options
         });
         if (res.status === 401) {
@@ -217,6 +281,8 @@ async function loadDashboard() {
         animateValue('valReceivedToday',    stats.receivedToday);
         animateValue('valTotalMessages',    stats.totalMessages);
         animateValue('valPendingScheduled', stats.pendingScheduled);
+        animateValue('valDocumentsShared',  stats.documentsShared || 0);
+        animateValue('valUpcomingAppointments', stats.upcomingAppointments || 0);
 
         // ── Leads ──
         const leads = stats.leads || {};
@@ -274,6 +340,8 @@ function animateValue(elementId, target) {
 // ═══════════════════════════════════════════════════════════
 //  MESSAGES
 // ═══════════════════════════════════════════════════════════
+let DOCUMENT_MESSAGES = new Map();
+
 async function loadMessages() {
     clearErrorBanner('messagesError');
     try {
@@ -285,6 +353,9 @@ async function loadMessages() {
         if (direction) endpoint += `&direction=${direction}`;
 
         const messages = await api(endpoint);
+        DOCUMENT_MESSAGES = new Map(messages
+            .filter(msg => msg.message_type === 'document' && Number.isSafeInteger(Number(msg.id)))
+            .map(msg => [String(msg.id), msg]));
         const tbody = document.getElementById('messagesBody');
 
         if (messages.length === 0) {
@@ -308,7 +379,9 @@ async function loadMessages() {
                     <strong>${escapeHtml(msg.contact_name || msg.phone)}</strong>
                     ${msg.contact_name ? `<br><small style="color:var(--color-text-secondary)">${escapeHtml(msg.phone)}</small>` : ''}
                 </td>
-                <td><span class="msg-truncate">${escapeHtml(msg.body)}</span></td>
+                <td>${msg.message_type === 'document'
+                    ? `<button type="button" class="btn btn-sm btn-secondary" data-document-message-id="${Number(msg.id)}">${Icon('file-text', 'icon-inline')} ${escapeHtml(msg.attachment_name || 'Document')}</button>${msg.body ? `<div class="msg-truncate" style="margin-top:5px">${escapeHtml(msg.body)}</div>` : ''}`
+                    : `<span class="msg-truncate">${escapeHtml(msg.body)}</span>`}</td>
                 <td><span class="badge badge-${msg.status}">${escapeHtml(msg.status)}</span></td>
                 <td style="white-space:nowrap;color:var(--color-text-secondary)">${formatDate(msg.created_at)}</td>
             </tr>
@@ -318,6 +391,49 @@ async function loadMessages() {
         document.getElementById('messagesBody').innerHTML =
             '<tr><td colspan="5" class="empty-state">Could not load messages.</td></tr>';
     }
+}
+
+function handleDocumentMessageClick(event) {
+    const button = event.target.closest('[data-document-message-id]');
+    if (!button || !document.getElementById('messagesBody').contains(button)) return;
+
+    const message = DOCUMENT_MESSAGES.get(button.dataset.documentMessageId);
+    if (message) openDocumentModal(message);
+}
+
+function closeDocumentModal() {
+    document.getElementById('documentModalBackdrop')?.classList.remove('show');
+}
+
+function openDocumentModal(msg) {
+    if (!msg.attachment_ref) return;
+    const url = `/api/documents/${encodeURIComponent(msg.attachment_ref)}`;
+    const previewable = ['application/pdf', 'text/plain', 'text/csv', 'application/csv'].includes(msg.attachment_mime);
+    const filename = msg.attachment_name || 'Document';
+    const mime = msg.attachment_mime || 'Document';
+    const safeStatus = ['sent', 'failed', 'pending'].includes(msg.status) ? msg.status : 'pending';
+    const body = document.getElementById('documentModalBody');
+    document.getElementById('documentModalTitle').textContent = filename;
+    body.innerHTML = `
+        <div class="document-viewer-summary">
+            <span class="document-viewer-icon" aria-hidden="true">${Icon('file-text')}</span>
+            <div class="document-viewer-title">
+                <strong>${escapeHtml(filename)}</strong>
+                <span>${escapeHtml(mime)}</span>
+            </div>
+        </div>
+        ${previewable
+            ? `<div class="document-preview-stage"><iframe class="document-preview-frame" title="${escapeHtml(filename)} preview" src="${url}#view=FitH" loading="eager"></iframe></div>`
+            : `<div class="document-preview-unavailable"><span aria-hidden="true">${Icon('file-text')}</span><strong>Preview unavailable</strong><p>This document type opens in its compatible application.</p></div>`}
+        <div class="document-viewer-footer">
+            <div class="document-viewer-details">
+                <span class="badge badge-${safeStatus}">${escapeHtml(msg.status || 'pending')}</span>
+                <span>Shared ${formatDate(msg.created_at)}</span>
+                ${msg.body ? `<span class="document-viewer-caption">${escapeHtml(msg.body)}</span>` : ''}
+            </div>
+            <a class="btn btn-primary btn-sm" href="${url}" target="_blank" rel="noopener">${Icon('external-link', 'icon-inline')} Open Document</a>
+        </div>`;
+    document.getElementById('documentModalBackdrop').classList.add('show');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -382,8 +498,8 @@ async function loadLeads() {
             html += `
                 <div class="empty-state">
                     <span class="empty-state-icon" aria-hidden="true">${Icon('target')}</span>
-                    <div class="empty-state-title">No lead analyses yet</div>
-                    <p>${(interest || priority) ? 'No leads match these filters.' : 'Click "Analyze All Chats" to let the AI review your conversations.'}</p>
+                    <div class="empty-state-title">No ${window.VerticalContext?.isHealthcare() ? 'conversation insights' : 'lead analyses'} yet</div>
+                    <p>${(interest || priority) ? `No ${window.VerticalContext?.isHealthcare() ? 'inquiries' : 'leads'} match these filters.` : 'Click "Analyze All Chats" to let the AI review your conversations.'}</p>
                 </div>`;
         } else {
             html += leads.map(renderLeadCard).join('');
@@ -413,7 +529,7 @@ function renderLeadCard(lead) {
                 <div class="lead-badges">
                     <span class="lead-badge ${interest.cls}">${interest.label()}</span>
                     <span class="lead-badge ${priority.cls}">${priority.label()}</span>
-                    <span class="lead-badge lead-badge-score" title="Interest score">${lead.interest_score}/100</span>
+                    <span class="lead-badge lead-badge-score" title="${window.VerticalContext?.isHealthcare() ? 'Inquiry priority' : 'Interest score'}">${lead.interest_score}/100</span>
                 </div>
             </div>
 
@@ -468,7 +584,7 @@ async function analyzeAllLeads() {
         showToast(err.message || 'Bulk analysis failed', 'error');
     } finally {
         btn.disabled = false;
-        btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('brain')}</span> Analyze All Chats`;
+        btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('brain')}</span> ${isHealthcareWorkflow() ? 'Analyze Conversations' : 'Analyze All Chats'}`;
     }
 }
 
@@ -486,6 +602,19 @@ const STAGE_META = {
 };
 // `label()` = icon + text (for headers/badges); plain `text` alone for <option> elements
 Object.values(STAGE_META).forEach(s => { s.label = () => Icon(s.icon) + ' ' + s.text; });
+
+function isHealthcareWorkflow() {
+    return !!(window.VerticalContext && window.VerticalContext.isHealthcare());
+}
+
+function workflowStageLabel(stage) {
+    if (!isHealthcareWorkflow()) return STAGE_META[stage]?.text || stage;
+    return ({
+        new: 'New Inquiry', contacted: 'Contacted', qualified: 'Service Details Shared',
+        proposal: 'Appointment Follow-up', negotiation: 'Team Follow-up',
+        won: 'Resolved', lost: 'Closed'
+    })[stage] || stage;
+}
 
 let crmCurrency = '₹';
 let crmDealsCache = [];
@@ -552,7 +681,7 @@ function renderCrmCharts(a) {
 
     const byStage = {};
     (a.stageBreakdown || []).forEach(r => { byStage[r.stage] = r; });
-    const stageLabels = ['New', 'Contacted', 'Qualified', 'Proposal', 'Negotiation'];
+    const stageLabels = OPEN_STAGES.map(workflowStageLabel);
     const stageCounts = OPEN_STAGES.map(s => byStage[s]?.count || 0);
     const stageValues = OPEN_STAGES.map(s => byStage[s]?.value || 0);
     const cur = a.currency || crmCurrency || '₹';
@@ -563,7 +692,7 @@ function renderCrmCharts(a) {
     if (donutEl) {
         if (stageCounts.every(c => c === 0)) {
             donutEl.style.display = 'none';
-            if (legendDealsEl) legendDealsEl.innerHTML = '<p class="chart-empty">No open deals yet — analyzed sales chats will appear here.</p>';
+            if (legendDealsEl) legendDealsEl.innerHTML = `<p class="chart-empty">${isHealthcareWorkflow() ? 'No open inquiries yet — conversation insights will appear here.' : 'No open deals yet — analyzed sales chats will appear here.'}</p>`;
         } else {
             donutEl.style.display = '';
             crmCharts.stageDeals = new Chart(donutEl, {
@@ -638,7 +767,7 @@ function renderCrmCharts(a) {
         const items = INTEREST_ORDER.map(i => ({ ...i, value: mixMap[i.key] || 0 }));
         if (items.every(i => i.value === 0)) {
             intEl.style.display = 'none';
-            if (legendIntEl) legendIntEl.innerHTML = '<p class="chart-empty">No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.</p>';
+            if (legendIntEl) legendIntEl.innerHTML = `<p class="chart-empty">${isHealthcareWorkflow() ? 'No conversation insights yet — run "Analyze Conversations" in Conversation Insights.' : 'No lead analyses yet — run "Analyze All Chats" in the Lead Analysis tab.'}</p>`;
         } else {
             intEl.style.display = '';
             crmCharts.interest = new Chart(intEl, {
@@ -738,8 +867,8 @@ async function loadCrm() {
             board.innerHTML = `
                 <div class="empty-state" style="grid-column: 1 / -1">
                     <span class="empty-state-icon" aria-hidden="true">${Icon('trending-up')}</span>
-                    <div class="empty-state-title">No deals yet</div>
-                    <p>Run a lead analysis (Lead Analysis tab) or add a deal manually — sales chats become deals automatically.</p>
+                    <div class="empty-state-title">${isHealthcareWorkflow() ? 'No inquiries yet' : 'No deals yet'}</div>
+                    <p>${isHealthcareWorkflow() ? 'Add an inquiry manually to organize administrative follow-ups.' : 'Run a lead analysis (Lead Analysis tab) or add a deal manually — sales chats become deals automatically.'}</p>
                 </div>`;
             return;
         }
@@ -751,7 +880,7 @@ async function loadCrm() {
             return `
                 <div class="kanban-column" data-stage="${stage}">
                     <div class="kanban-column-header" style="border-top: 3px solid ${meta.color}">
-                        <span class="kanban-column-title">${meta.label()}</span>
+                        <span class="kanban-column-title">${Icon(meta.icon)} ${escapeHtml(workflowStageLabel(stage))}</span>
                         <span class="kanban-column-meta">${stageDeals.length}${stageValue ? ` · ${fmtMoney(stageValue)}` : ''}</span>
                     </div>
                     <div class="kanban-cards">
@@ -760,7 +889,7 @@ async function loadCrm() {
                 </div>`;
         }).join('');
     } catch (err) {
-        showErrorBanner('crmError', 'Failed to load CRM pipeline.', loadCrm);
+        showErrorBanner('crmError', isHealthcareWorkflow() ? 'Failed to load inquiry management.' : 'Failed to load CRM pipeline.', loadCrm);
         document.getElementById('kanbanBoard').innerHTML = '';
     }
 }
@@ -802,7 +931,7 @@ async function openDealModal(phone) {
     const title = document.getElementById('dealModalTitle');
 
     backdrop.classList.add('show');
-    body.innerHTML = '<div class="empty-state">Loading deal…</div>';
+    body.innerHTML = `<div class="empty-state">Loading ${isHealthcareWorkflow() ? 'inquiry' : 'deal'}…</div>`;
 
     try {
         const { deal, analysis, activities } = await api(`/api/crm/deals/phone/${encodeURIComponent(phone)}`);
@@ -816,13 +945,13 @@ async function openDealModal(phone) {
                     <label>Stage</label>
                     <select id="modalDealStage">
                         ${Object.keys(STAGE_META).map(s =>
-                            `<option value="${s}" ${deal.stage === s ? 'selected' : ''}>${STAGE_META[s].text}</option>`).join('')}
+                            `<option value="${s}" ${deal.stage === s ? 'selected' : ''}>${workflowStageLabel(s)}</option>`).join('')}
                     </select>
                     ${deal.ai_suggested_stage && deal.ai_suggested_stage !== deal.stage
                         ? `<p class="form-text">${Icon('brain', 'icon-inline')}AI suggests: <strong>${escapeHtml(deal.ai_suggested_stage)}</strong></p>` : ''}
                 </div>
                 <div class="form-group">
-                    <label>Deal Value (${escapeHtml(crmCurrency)})</label>
+                    <label>${isHealthcareWorkflow() ? 'Service Value' : 'Deal Value'} (${escapeHtml(crmCurrency)})</label>
                     <input type="number" id="modalDealValue" value="${parseFloat(deal.deal_value) || 0}" min="0" step="any">
                     ${deal.ai_estimated_value && !parseFloat(deal.deal_value)
                         ? `<p class="form-text">${Icon('brain', 'icon-inline')}AI estimate: ${fmtMoney(deal.ai_estimated_value)}</p>` : ''}
@@ -838,13 +967,13 @@ async function openDealModal(phone) {
             </div>
 
             <div class="form-group">
-                <label>Deal Notes</label>
+                <label>${isHealthcareWorkflow() ? 'Inquiry Notes' : 'Deal Notes'}</label>
                 <textarea id="modalDealNotes" rows="2">${escapeHtml(deal.notes || '')}</textarea>
             </div>
 
             <div class="modal-actions">
                 <button class="btn btn-primary btn-sm" onclick="saveDealFromModal(${deal.id})" type="button">${Icon('save', 'icon-inline')}Save Changes</button>
-                <button class="btn btn-danger btn-sm" onclick="deleteDealFromModal(${deal.id})" type="button">${Icon('trash-2', 'icon-inline')}Delete Deal</button>
+                <button class="btn btn-danger btn-sm" onclick="deleteDealFromModal(${deal.id})" type="button">${Icon('trash-2', 'icon-inline')}Delete ${isHealthcareWorkflow() ? 'Inquiry' : 'Deal'}</button>
                 <small style="color:var(--color-text-secondary)">${escapeHtml(deal.phone)} · Source: ${escapeHtml(deal.source || 'whatsapp')}${deal.payment_link_sent_at ? ` · 💳 Payment link sent ${formatDate(deal.payment_link_sent_at)}` : ''}</small>
             </div>
 
@@ -856,7 +985,7 @@ async function openDealModal(phone) {
                 </div>` : `
                 <div class="modal-section">
                     <h3>${Icon('target', 'icon-inline')}AI Conversation Insight</h3>
-                    <p style="color:var(--color-text-secondary);font-size:0.85rem">Not analyzed yet — run it from the Lead Analysis tab.</p>
+                    <p style="color:var(--color-text-secondary);font-size:0.85rem">${isHealthcareWorkflow() ? 'No conversation insight yet — run it from Conversation Insights.' : 'Not analyzed yet — run it from the Lead Analysis tab.'}</p>
                 </div>`}
 
             <div class="modal-section">
@@ -904,7 +1033,7 @@ async function saveDealFromModal(dealId) {
                 notes:            document.getElementById('modalDealNotes').value
             })
         });
-        showToast('Deal updated', 'success');
+        showToast(isHealthcareWorkflow() ? 'Inquiry updated' : 'Deal updated', 'success');
         closeDealModal();
         loadCrm();
     } catch (err) {
@@ -913,10 +1042,10 @@ async function saveDealFromModal(dealId) {
 }
 
 async function deleteDealFromModal(dealId) {
-    if (!confirm('Delete this deal? The conversation and lead analysis are kept.')) return;
+    if (!confirm(isHealthcareWorkflow() ? 'Delete this inquiry? The conversation and insights are kept.' : 'Delete this deal? The conversation and lead analysis are kept.')) return;
     try {
         await api(`/api/crm/deals/${dealId}`, { method: 'DELETE' });
-        showToast('Deal deleted', 'success');
+        showToast(isHealthcareWorkflow() ? 'Inquiry deleted' : 'Deal deleted', 'success');
         closeDealModal();
         loadCrm();
     } catch (err) {
@@ -2152,13 +2281,23 @@ function applyConnectionState(data) {
 
     const show = (el) => { if (el) el.style.display = ''; };
     const hide = (el) => { if (el) el.style.display = 'none'; };
+    const showQrSuccess = () => {
+        if (!qrSuccess) return;
+        qrSuccess.style.display = '';
+        qrSuccess.classList.add('is-visible');
+    };
+    const hideQrSuccess = () => {
+        if (!qrSuccess) return;
+        qrSuccess.style.display = '';
+        qrSuccess.classList.remove('is-visible');
+    };
 
     // Remove any previous reconnect button if present
     const oldReconnect = document.getElementById('qrReconnectBtnContainer');
     if (oldReconnect) oldReconnect.remove();
 
     if (data.type === 'qr') {
-        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        show(qrLoading); hide(qrImage); hideQrSuccess();
         if (qrImage) { qrImage.src = data.data; qrImage.style.display = 'block'; }
         if (qrLoading) qrLoading.style.display = 'none';
         if (statusDot)  statusDot.className  = 'status-dot error';
@@ -2166,7 +2305,7 @@ function applyConnectionState(data) {
         if (connInfo)   connInfo.innerHTML   = `<p style="color:var(--color-warning)">${Icon('triangle-alert', 'icon-inline')}Waiting for QR Code scan. Go to Settings → WhatsApp QR.</p>`;
 
     } else if (data.type === 'ready') {
-        hide(qrLoading); hide(qrImage); show(qrSuccess);
+        hide(qrLoading); hide(qrImage); showQrSuccess();
         if (statusDot)  statusDot.className  = 'status-dot connected';
         if (statusText) statusText.textContent = 'Connected';
         if (connInfo)   connInfo.innerHTML   = `
@@ -2176,7 +2315,7 @@ function applyConnectionState(data) {
     } else if (data.type === 'disconnected' || data.type === 'error') {
         const syncBanner = document.getElementById('syncBanner');
         if (syncBanner) syncBanner.style.display = 'none';
-        hide(qrLoading); hide(qrImage); hide(qrSuccess);
+        hide(qrLoading); hide(qrImage); hideQrSuccess();
         if (statusDot)  statusDot.className  = 'status-dot error';
         if (statusText) statusText.textContent = data.type === 'error' ? 'Connection Error' : 'Disconnected';
         const errorMsg = data.data || (data.type === 'error' ? 'Connection Error' : 'Not connected');
@@ -2221,7 +2360,7 @@ function applyConnectionState(data) {
         }
 
     } else if (data.type === 'loading') {
-        show(qrLoading); hide(qrImage); hide(qrSuccess);
+        show(qrLoading); hide(qrImage); hideQrSuccess();
         if (statusDot)  statusDot.className  = 'status-dot demo';
         if (statusText) statusText.textContent = 'Initializing…';
         if (connInfo)   connInfo.innerHTML   = '<p>Loading WhatsApp Client…</p>';
@@ -2340,30 +2479,52 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     // ── Quick send form ─────────────────────────────────────
+    const qsDocument = document.getElementById('qsDocument');
+    const renderQuickSendAttachment = () => {
+        const file = qsDocument.files[0];
+        document.getElementById('qsAttachmentMeta').classList.toggle('is-visible', Boolean(file));
+        document.getElementById('qsAttachmentName').textContent = file ? file.name : '';
+    };
+    qsDocument.addEventListener('change', renderQuickSendAttachment);
+    document.getElementById('qsClearDocument').addEventListener('click', () => { qsDocument.value = ''; renderQuickSendAttachment(); });
+    document.getElementById('documentModalClose').addEventListener('click', closeDocumentModal);
+    document.getElementById('documentModalBackdrop').addEventListener('click', (e) => { if (e.target.id === 'documentModalBackdrop') closeDocumentModal(); });
     document.getElementById('quickSendForm').addEventListener('submit', async (e) => {
         e.preventDefault();
         const phone   = document.getElementById('qsPhone').value.trim();
         const message = document.getElementById('qsMessage').value.trim();
-        if (!phone || !message) return;
+        const documentFile = document.getElementById('qsDocument').files[0];
+        if (!phone || (!message && !documentFile)) { showToast('Enter a phone number and a message or document.', 'error'); return; }
 
         const btn = document.getElementById('quickSendBtn');
         btn.disabled = true;
         btn.textContent = 'Sending…';
+        const idempotencyKey = globalThis.crypto?.randomUUID
+            ? globalThis.crypto.randomUUID()
+            : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
         try {
-            await api('/api/messages/send', {
-                method: 'POST',
-                body: JSON.stringify({ phone, body: message })
-            });
-            showToast(`Message sent to ${phone}`, 'success');
+            let payload;
+            if (documentFile) {
+                payload = new FormData();
+                payload.append('phone', phone);
+                payload.append('body', message);
+                payload.append('document', documentFile);
+            } else {
+                payload = JSON.stringify({ phone, body: message });
+            }
+            await api('/api/messages/send', { method: 'POST', body: payload, headers: { 'Idempotency-Key': idempotencyKey } });
+            showToast(`${documentFile ? 'Document' : 'Message'} sent to ${phone}`, 'success');
             document.getElementById('qsPhone').value    = '';
             document.getElementById('qsMessage').value  = '';
+            document.getElementById('qsDocument').value = '';
+            renderQuickSendAttachment();
             loadMessages();
         } catch (err) {
             showToast(err.message || 'Failed to send message', 'error');
         } finally {
             btn.disabled = false;
-            btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message`;
+            btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message / Document`;
         }
     });
 
@@ -2485,6 +2646,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('outreachDoneBtn').addEventListener('click', closeOutreachModal);
 
     // ── Message search & filter ─────────────────────────────
+    document.getElementById('messagesBody').addEventListener('click', handleDocumentMessageClick);
     let messageSearchTimeout;
     document.getElementById('messageSearch').addEventListener('input', () => {
         clearTimeout(messageSearchTimeout);
@@ -2535,7 +2697,7 @@ document.addEventListener('DOMContentLoaded', async () => {
                     product_interest: document.getElementById('dealProduct').value.trim()
                 })
             });
-            showToast('Deal added!', 'success');
+            showToast(isHealthcareWorkflow() ? 'Inquiry added!' : 'Deal added!', 'success');
             document.getElementById('addDealForm').reset();
             document.getElementById('addDealCard').style.display = 'none';
             loadCrm();

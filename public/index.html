@@ -6,7 +6,7 @@
     <title>WhatsApp Automation — Dashboard</title>
     <meta name="description" content="Manage your WhatsApp Business automation — chatbot rules, contacts, scheduled messages and analytics.">
     <meta name="theme-color" content="#0D4530">
-    <link rel="stylesheet" href="css/style.css?v=2.4">
+    <link rel="stylesheet" href="css/style.css?v=2.5">
     <style>
         /* Failsafe: Ensure modal backdrops are hidden by default even if external stylesheet is cached */
         .modal-backdrop { display: none !important; }
@@ -45,11 +45,11 @@
         </a>
         <a href="#" class="nav-item" data-section="leads" id="nav-leads" role="menuitem">
             <span class="nav-icon" data-icon="target" aria-hidden="true"></span>
-            <span class="nav-label">Lead Analysis</span>
+            <span class="nav-label" id="navInsightsLabel">Lead Analysis</span>
         </a>
         <a href="#" class="nav-item" data-section="crm" id="nav-crm" role="menuitem">
             <span class="nav-icon" data-icon="trending-up" aria-hidden="true"></span>
-            <span class="nav-label">CRM</span>
+            <span class="nav-label" id="navCrmLabel">CRM</span>
         </a>
         <a href="#" class="nav-item" data-section="chatbot" id="nav-chatbot" role="menuitem">
             <span class="nav-icon" data-icon="bot" aria-hidden="true"></span>
@@ -156,30 +156,37 @@
                         <span class="stat-label">Scheduled Pending</span>
                     </div>
                 </div>
+                <div class="stat-card stat-clickable" role="listitem" data-goto="messages" title="Open Messages">
+                    <div class="stat-icon total" data-icon="file-text" aria-hidden="true"></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valDocumentsShared">0</span>
+                        <span class="stat-label">Documents Shared</span>
+                    </div>
+                </div>
             </div>
 
             <!-- ── Leads ── -->
-            <div class="stat-group-title"><span data-icon="target" aria-hidden="true"></span> Leads</div>
+            <div class="stat-group-title"><span data-icon="target" aria-hidden="true"></span> <span id="dashboardInsightsGroupLabel">Leads</span></div>
             <div class="stats-grid" role="list" aria-label="Lead metrics">
                 <div class="stat-card stat-clickable" role="listitem" data-goto="leads" title="Open Lead Analysis">
                     <div class="stat-icon analyzed" data-icon="brain" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashLeadsTotal">0</span>
-                        <span class="stat-label">Analyzed Chats</span>
+                        <span class="stat-label" id="insightsAnalyzedLabel">Analyzed Chats</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="leads" title="Open Lead Analysis">
                     <div class="stat-icon interested" data-icon="heart" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashInterested">0</span>
-                        <span class="stat-label">Interested Leads</span>
+                        <span class="stat-label" id="dashboardInterestedLabel">Interested Leads</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="leads" title="Open Lead Analysis">
                     <div class="stat-icon hot" data-icon="flame" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashHighPriority">0</span>
-                        <span class="stat-label">High Priority</span>
+                        <span class="stat-label" id="dashboardPriorityLabel">High Priority</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="leads" title="Open Lead Analysis">
@@ -192,27 +199,27 @@
             </div>
 
             <!-- ── Sales Pipeline ── -->
-            <div class="stat-group-title"><span data-icon="briefcase" aria-hidden="true"></span> Sales Pipeline</div>
-            <div class="stats-grid" role="list" aria-label="Sales metrics">
+            <div class="stat-group-title vertical-sales-only"><span data-icon="briefcase" aria-hidden="true"></span> <span id="dashboardWorkflowGroupLabel">Sales Pipeline</span></div>
+            <div class="stats-grid vertical-sales-only" role="list" aria-label="Sales metrics">
                 <div class="stat-card stat-clickable" role="listitem" data-goto="crm" title="Open CRM">
                     <div class="stat-icon money" data-icon="wallet" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashPipeline">0</span>
-                        <span class="stat-label">Pipeline Value</span>
+                        <span class="stat-label" id="dashboardWorkflowValueLabel">Pipeline Value</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="crm" title="Open CRM">
                     <div class="stat-icon deals" data-icon="folder-open" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashOpenDeals">0</span>
-                        <span class="stat-label">Open Deals</span>
+                        <span class="stat-label" id="dashboardWorkflowOpenLabel">Open Deals</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="crm" title="Open CRM">
                     <div class="stat-icon won" data-icon="trophy" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valDashWon">0</span>
-                        <span class="stat-label">Deals Won</span>
+                        <span class="stat-label" id="dashboardWorkflowResolvedLabel">Deals Won</span>
                     </div>
                 </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="crm" title="Open CRM">
@@ -227,6 +234,13 @@
             <!-- ── Workspace ── -->
             <div class="stat-group-title"><span data-icon="settings" aria-hidden="true"></span> Workspace</div>
             <div class="stats-grid" role="list" aria-label="Workspace status">
+                <div class="stat-card stat-clickable vertical-healthcare-only" role="listitem" data-goto="appointments" title="Open Appointments">
+                    <div class="stat-icon scheduled" data-icon="calendar-clock" aria-hidden="true"></div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="valUpcomingAppointments">0</span>
+                        <span class="stat-label">Upcoming Appointments</span>
+                    </div>
+                </div>
                 <div class="stat-card stat-clickable" role="listitem" data-goto="contacts" title="Open Contacts">
                     <div class="stat-icon contacts" data-icon="users" aria-hidden="true"></div>
                     <div class="stat-info">
@@ -280,11 +294,24 @@
                         </div>
                         <div class="form-group">
                             <label for="qsMessage">Message</label>
-                            <textarea id="qsMessage" rows="2" placeholder="Type your message…" required></textarea>
+                            <textarea id="qsMessage" rows="2" placeholder="Optional caption or message…"></textarea>
+                        </div>
+                        <div class="form-group quick-send-document-field">
+                            <label for="qsDocument">Document</label>
+                            <input type="file" id="qsDocument" class="sr-only" accept=".pdf,.docx,.xlsx,.pptx,.txt,.csv,application/pdf,text/plain,text/csv">
+                            <div class="quick-send-document-control">
+                                <label for="qsDocument" class="btn btn-secondary btn-sm quick-send-attach-btn"><span data-icon="paperclip" aria-hidden="true"></span> Attach Document</label>
+                                <div id="qsAttachmentMeta" class="quick-send-attachment-meta" aria-live="polite">
+                                    <span data-icon="file-text" aria-hidden="true"></span>
+                                    <span id="qsAttachmentName"></span>
+                                    <button type="button" class="quick-send-clear-btn" id="qsClearDocument">Remove</button>
+                                </div>
+                            </div>
+                            <small class="quick-send-document-note">PDF, Office, TXT, or CSV · maximum 10MB</small>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary" id="quickSendBtn">
-                        <span class="btn-icon" data-icon="send" aria-hidden="true"></span> Send Message
+                        <span class="btn-icon" data-icon="send" aria-hidden="true"></span> Send Message / Document
                     </button>
                 </form>
             </div>
@@ -328,7 +355,7 @@
         <div class="page-inner">
             <div class="section-header">
                 <h1 id="leads-heading">Lead Analysis</h1>
-                <p class="section-subtitle">AI-powered summaries, interest detection, issues and priorities for every conversation</p>
+                <p class="section-subtitle" id="insightsSubtitle">AI-powered summaries, interest detection, issues and priorities for every conversation</p>
             </div>
 
             <div id="leadsError" style="display:none"></div>
@@ -346,21 +373,21 @@
                     <div class="stat-icon received" data-icon="check-circle" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valLeadsInterested">0</span>
-                        <span class="stat-label">Interested</span>
+                        <span class="stat-label" id="insightsInterestedLabel">Interested</span>
                     </div>
                 </div>
                 <div class="stat-card" role="listitem">
                     <div class="stat-icon rules" data-icon="flame" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valLeadsHigh">0</span>
-                        <span class="stat-label">High Priority</span>
+                        <span class="stat-label" id="insightsPriorityLabel">High Priority</span>
                     </div>
                 </div>
                 <div class="stat-card" role="listitem">
                     <div class="stat-icon contacts" data-icon="hourglass" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valLeadsPending">0</span>
-                        <span class="stat-label">Awaiting Analysis</span>
+                        <span class="stat-label" id="insightsAwaitingLabel">Awaiting Analysis</span>
                     </div>
                 </div>
             </div>
@@ -368,14 +395,14 @@
             <div class="toolbar">
                 <div class="filter-group">
                     <select id="leadInterestFilter" aria-label="Filter by interest">
-                        <option value="">All Interest Levels</option>
-                        <option value="interested">Interested</option>
+                        <option value="" id="interestFilterAll">All Interest Levels</option>
+                        <option value="interested" id="interestFilterInterested">Interested</option>
                         <option value="neutral">Neutral</option>
-                        <option value="not_interested">Not Interested</option>
+                        <option value="not_interested" id="interestFilterNotInterested">Not Interested</option>
                         <option value="unclear">Unclear</option>
                     </select>
                     <select id="leadPriorityFilter" aria-label="Filter by priority">
-                        <option value="">All Priorities</option>
+                        <option value="" id="priorityFilterAll">All Priorities</option>
                         <option value="high">High</option>
                         <option value="medium">Medium</option>
                         <option value="low">Low</option>
@@ -383,7 +410,7 @@
                 </div>
                 <div class="topbar-spacer"></div>
                 <button class="btn btn-primary" id="analyzeAllBtn" type="button">
-                    <span class="btn-icon" data-icon="brain" aria-hidden="true"></span> Analyze All Chats
+                    <span class="btn-icon" data-icon="brain" aria-hidden="true"></span> <span id="analyzeAllLabel">Analyze All Chats</span>
                 </button>
             </div>
 
@@ -401,7 +428,7 @@
         <div class="page-inner page-inner-wide">
             <div class="section-header">
                 <h1 id="crm-heading">CRM Pipeline</h1>
-                <p class="section-subtitle">Track every conversation as a deal — auto-filled by AI, managed by you</p>
+                <p class="section-subtitle" id="crmSubtitle">Track every conversation as a deal — auto-filled by AI, managed by you</p>
             </div>
 
             <div id="crmError" style="display:none"></div>
@@ -412,21 +439,21 @@
                     <div class="stat-icon sent" data-icon="wallet" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valCrmPipeline">0</span>
-                        <span class="stat-label">Pipeline Value</span>
+                        <span class="stat-label" id="crmValueLabel">Pipeline Value</span>
                     </div>
                 </div>
                 <div class="stat-card" role="listitem">
                     <div class="stat-icon received" data-icon="folder-open" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valCrmOpen">0</span>
-                        <span class="stat-label">Open Deals</span>
+                        <span class="stat-label" id="crmOpenLabel">Open Deals</span>
                     </div>
                 </div>
                 <div class="stat-card" role="listitem">
                     <div class="stat-icon rules" data-icon="trophy" aria-hidden="true"></div>
                     <div class="stat-info">
                         <span class="stat-value" id="valCrmWon">0</span>
-                        <span class="stat-label">Won</span>
+                        <span class="stat-label" id="crmResolvedLabel">Won</span>
                     </div>
                 </div>
                 <div class="stat-card" role="listitem">
@@ -441,18 +468,18 @@
             <!-- Analytics charts -->
             <div class="charts-grid" id="crmChartsGrid">
                 <div class="card chart-card">
-                    <h2 class="card-title"><span data-icon="pie-chart" data-icon-class="icon-inline" aria-hidden="true"></span>Open Deals by Stage</h2>
+                    <h2 class="card-title"><span data-icon="pie-chart" data-icon-class="icon-inline" aria-hidden="true"></span><span id="crmStageChartLabel">Open Deals by Stage</span></h2>
                     <div class="chart-flex">
                         <div class="chart-canvas-wrap chart-donut"><canvas id="chartStageDeals" role="img" aria-label="Donut chart of open deals per pipeline stage"></canvas></div>
                         <div class="chart-legend" id="legendStageDeals"></div>
                     </div>
                 </div>
                 <div class="card chart-card">
-                    <h2 class="card-title"><span data-icon="wallet" data-icon-class="icon-inline" aria-hidden="true"></span>Pipeline Value by Stage</h2>
+                    <h2 class="card-title"><span data-icon="wallet" data-icon-class="icon-inline" aria-hidden="true"></span><span id="crmValueChartLabel">Pipeline Value by Stage</span></h2>
                     <div class="chart-canvas-wrap chart-bars"><canvas id="chartStageValue" role="img" aria-label="Bar chart of deal value per pipeline stage"></canvas></div>
                 </div>
                 <div class="card chart-card">
-                    <h2 class="card-title"><span data-icon="target" data-icon-class="icon-inline" aria-hidden="true"></span>Lead Interest Mix</h2>
+                    <h2 class="card-title"><span data-icon="target" data-icon-class="icon-inline" aria-hidden="true"></span><span id="crmInterestChartLabel">Lead Interest Mix</span></h2>
                     <div class="chart-flex">
                         <div class="chart-canvas-wrap chart-donut"><canvas id="chartInterest" role="img" aria-label="Donut chart of leads by interest level"></canvas></div>
                         <div class="chart-legend" id="legendInterest"></div>
@@ -466,15 +493,15 @@
 
             <div class="toolbar">
                 <div class="filter-group">
-                    <button class="btn btn-secondary btn-sm" id="addDealBtn" type="button"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> Add Deal</button>
+                    <button class="btn btn-secondary btn-sm" id="addDealBtn" type="button"><span class="btn-icon" data-icon="plus" aria-hidden="true"></span> <span id="addWorkflowItemLabel">Add Deal</span></button>
                 </div>
                 <div class="topbar-spacer"></div>
-                <small style="color:var(--color-text-secondary)">Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.</small>
+                <small style="color:var(--color-text-secondary)" id="crmHelperText">Deals are auto-created when the AI analyzes a sales chat. Personal chats are skipped.</small>
             </div>
 
             <!-- Add deal form (hidden by default) -->
             <div class="card" id="addDealCard" style="display:none">
-                <h2 class="card-title">Add Deal Manually</h2>
+                <h2 class="card-title" id="addWorkflowItemTitle">Add Deal Manually</h2>
                 <form id="addDealForm" novalidate>
                     <div class="form-row-3">
                         <div class="form-group">
@@ -486,13 +513,13 @@
                             <input type="text" id="dealName" placeholder="Name">
                         </div>
                         <div class="form-group">
-                            <label for="dealValue">Deal Value</label>
+                            <label for="dealValue" id="dealValueFieldLabel">Deal Value</label>
                             <input type="number" id="dealValue" placeholder="0" min="0" step="any">
                         </div>
                     </div>
                     <div class="form-row">
                         <div class="form-group">
-                            <label for="dealStage">Stage</label>
+                            <label for="dealStage" id="dealStageFieldLabel">Stage</label>
                             <select id="dealStage">
                                 <option value="new">New</option>
                                 <option value="contacted">Contacted</option>
@@ -504,11 +531,11 @@
                             </select>
                         </div>
                         <div class="form-group">
-                            <label for="dealProduct">Product / Service</label>
+                            <label for="dealProduct" id="dealProductFieldLabel">Product / Service</label>
                             <input type="text" id="dealProduct" placeholder="What are they interested in?">
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Add Deal</button>
+                    <button type="submit" class="btn btn-primary" id="saveWorkflowItemLabel">Add Deal</button>
                 </form>
             </div>
 
@@ -932,7 +959,7 @@
                 </div>
 
                 <div class="card">
-                    <h2 class="card-title"><span data-icon="package" data-icon-class="icon-inline" aria-hidden="true"></span>Products &amp; Services Catalog</h2>
+                    <h2 class="card-title"><span data-icon="package" data-icon-class="icon-inline" aria-hidden="true"></span><span id="catalogHeading">Products &amp; Services Catalog</span></h2>
                     <form id="addProductForm" novalidate>
                         <div class="form-row-3">
                             <div class="form-group">
@@ -971,8 +998,8 @@
                 </div>
 
                 <div class="card">
-                    <h2 class="card-title"><span data-icon="brain" data-icon-class="icon-inline" aria-hidden="true"></span>AI Business Analysis</h2>
-                    <p class="card-note">Let the AI study your business and generate a sales brief — positioning, selling points, a ready-to-send pitch, and objection handling. This brief also sharpens auto-replies and lead scoring.</p>
+                    <h2 class="card-title"><span data-icon="brain" data-icon-class="icon-inline" aria-hidden="true"></span><span id="businessProfileHeading">AI Business Analysis</span></h2>
+                    <p class="card-note" id="businessProfileNote">Let the AI study your business and generate a sales brief — positioning, selling points, a ready-to-send pitch, and objection handling. This brief also sharpens auto-replies and lead scoring.</p>
                     <button class="btn btn-primary" id="analyzeBusinessBtn" type="button">
                         <span class="btn-icon" data-icon="brain" aria-hidden="true"></span> Analyze My Business
                     </button>
@@ -1043,23 +1070,23 @@
                     <p class="card-note">Scan this QR code with your personal WhatsApp to connect the bot.</p>
                     
                     <div class="qr-container" id="qrContainer" aria-live="polite">
-                        <div class="qr-loading" id="qrLoading">Waiting for QR Code… (This may take up to 30 seconds)</div>
+                        <div class="qr-loading" id="qrLoading"><span class="qr-loading-spinner" aria-hidden="true"></span>Waiting for QR Code… <span>This may take up to 30 seconds.</span></div>
                         <img id="qrImage" src="" alt="WhatsApp QR Code — scan with your phone" class="qr-image">
-                        <div class="qr-success" id="qrSuccess" style="display:none;">
+                        <div class="qr-success" id="qrSuccess">
                             <span data-icon="check-circle" data-icon-class="icon-inline" aria-hidden="true"></span>WhatsApp is Connected!
                         </div>
                     </div>
 
-                    <div style="max-width:380px;margin:16px auto 0;background:var(--color-bg);padding:14px 18px;border-radius:10px;border:1px solid var(--color-border);font-size:0.84rem;color:var(--color-text-secondary);line-height:1.6;">
-                        <strong style="color:var(--color-text-primary);display:block;margin-bottom:6px;">📱 How to connect:</strong>
-                        <ol style="margin:0;padding-left:18px;">
+                    <div class="qr-connect-guide">
+                        <strong class="qr-connect-title">📱 How to connect</strong>
+                        <ol class="qr-connect-steps">
                             <li>Open <strong>WhatsApp</strong> on your phone</li>
                             <li>Tap <strong>Menu (⋮)</strong> or <strong>Settings (⚙️)</strong> ➡️ <strong>Linked Devices</strong></li>
                             <li>Tap <strong>Link a Device</strong> and scan the QR code above</li>
                         </ol>
                     </div>
 
-                    <div style="margin-top:16px;display:flex;gap:10px;justify-content:center">
+                    <div class="qr-actions">
                         <button type="button" class="btn btn-secondary btn-sm" id="resetWaSessionBtn">
                             <span class="btn-icon" data-icon="refresh-cw" aria-hidden="true"></span> Reset &amp; Get Fresh QR Code
                         </button>
@@ -1178,27 +1205,27 @@
                     <h2 class="card-title"><span data-icon="triangle-alert" data-icon-class="icon-inline" aria-hidden="true"></span>Danger Zone</h2>
                     <p class="card-note">These actions are irreversible. Please be certain before proceeding.</p>
 
-                    <div style="display:flex;flex-direction:column;gap:12px;">
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
-                            <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Pause Chatbot</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Temporarily stop all auto-replies without losing configuration.</div>
+                    <div class="danger-zone-actions">
+                        <div class="danger-zone-action">
+                            <div class="danger-zone-copy">
+                                <h3>Pause Chatbot</h3>
+                                <p>Temporarily stop all auto-replies without losing configuration.</p>
                             </div>
                             <button class="btn btn-danger btn-sm" id="pauseChatbotBtn" type="button">Pause</button>
                         </div>
 
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--color-border);">
-                            <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Clear Message History</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Delete all stored messages from the database permanently.</div>
+                        <div class="danger-zone-action">
+                            <div class="danger-zone-copy">
+                                <h3>Clear Message History</h3>
+                                <p>Delete all stored messages from the database permanently.</p>
                             </div>
                             <button class="btn btn-danger btn-sm" id="clearMessagesBtn" type="button">Clear All</button>
                         </div>
 
-                        <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 0;">
-                            <div>
-                                <div style="font-weight:600;font-size:0.9rem;color:var(--color-text-primary);">Disconnect WhatsApp</div>
-                                <div style="font-size:0.8rem;color:var(--color-text-secondary);margin-top:2px;">Log out of the current WhatsApp session. You will need to re-scan the QR code.</div>
+                        <div class="danger-zone-action">
+                            <div class="danger-zone-copy">
+                                <h3>Disconnect WhatsApp</h3>
+                                <p>Log out of the current WhatsApp session. You will need to re-scan the QR code.</p>
                             </div>
                             <button class="btn btn-danger btn-sm" id="disconnectBtn" type="button">Disconnect</button>
                         </div>
@@ -1210,6 +1237,17 @@
     </section>
 
 </main>
+
+<!-- ── Document Detail Modal ── -->
+<div class="modal-backdrop" id="documentModalBackdrop" role="dialog" aria-modal="true" aria-labelledby="documentModalTitle">
+    <div class="modal document-modal">
+        <div class="modal-header">
+            <h2 id="documentModalTitle">Shared Document</h2>
+            <button class="modal-close" id="documentModalClose" aria-label="Close" type="button">×</button>
+        </div>
+        <div class="modal-body document-modal-body" id="documentModalBody"></div>
+    </div>
+</div>
 
 <!-- ── Screen-reader only utility ── -->
 <style>.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}</style>
@@ -1341,6 +1379,7 @@
 
 <script src="js/chart.umd.min.js"></script>
 <script src="js/icons.js?v=2.8"></script>
-<script src="js/app.js?v=2.8"></script>
+<script src="js/vertical-context.js?v=1"></script>
+<script src="js/app.js?v=3.3"></script>
 </body>
 </html>

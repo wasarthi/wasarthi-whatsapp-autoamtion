@@ -30,7 +30,7 @@ const authRoutes                    = require('../routes/auth');
 const adminRoutes                   = require('../routes/admin');
 const calendarRoutes                = require('../routes/calendar');
 const appointmentRoutes             = require('../routes/appointments');
-const { requireAuth, requireAdmin } = require('../middleware/auth');
+const { requireAuth, requireAdmin, requireSystemAdmin } = require('../middleware/auth');
 const { errorHandler }              = require('../utils/errors');
 const { addSSEClient, getSessionMetrics } = require('../services/whatsapp-client');
 const { getPersistHealth, getSchemaVersion, countUsers, getPublicProductById } = require('../services/database');
@@ -215,7 +215,7 @@ app.get('/health', (req, res) => {
     app.use('/api/auth', authRoutes);
 
     // ─── Admin routes (admin-only) ──────────────────────────────
-    app.use('/api/admin', requireAdmin, adminRoutes);
+    app.use('/api/admin', requireSystemAdmin, adminRoutes);
 
     // ─── Per-account SSE stream for QR code / connection status ──
     // req.user.id, never a parameter: the stream is bound to the

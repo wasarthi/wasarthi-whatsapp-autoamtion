@@ -450,6 +450,25 @@ const MIGRATIONS = [
                 }
             }
         }
+    },
+    {
+        version: 11,
+        name: 'add document attachment metadata to messages',
+        up: () => {
+            if (!tableExists('messages')) return;
+            if (!tableHasColumn('messages', 'attachment_name')) db.run("ALTER TABLE messages ADD COLUMN attachment_name TEXT");
+            if (!tableHasColumn('messages', 'attachment_mime')) db.run("ALTER TABLE messages ADD COLUMN attachment_mime TEXT");
+            if (!tableHasColumn('messages', 'attachment_ref')) db.run("ALTER TABLE messages ADD COLUMN attachment_ref TEXT");
+        }
+    },
+    {
+        version: 12,
+        name: 'users.business_vertical: account business vertical',
+        up: () => {
+            if (!tableHasColumn('users', 'business_vertical')) {
+                db.run("ALTER TABLE users ADD COLUMN business_vertical TEXT NOT NULL DEFAULT 'general' CHECK(business_vertical IN ('general', 'healthcare'))");
+            }
+        }
     }
 ];
 
@@ -609,6 +628,7 @@ async function initDatabase() {
             password_hash TEXT NOT NULL,
             business_name TEXT DEFAULT '',
             owner_name TEXT DEFAULT '',
+            business_vertical TEXT NOT NULL DEFAULT 'general' CHECK(business_vertical IN ('general', 'healthcare')),
             role TEXT DEFAULT 'user' CHECK(role IN ('admin', 'user')),
             status TEXT DEFAULT 'active' CHECK(status IN ('active', 'suspended')),
             plan TEXT DEFAULT 'free',
@@ -650,6 +670,9 @@ async function initDatabase() {
             body TEXT DEFAULT '',
             status TEXT DEFAULT 'sent',
             template_name TEXT,
+            attachment_name TEXT,
+            attachment_mime TEXT,
+            attachment_ref TEXT,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )
     `);
@@ -1046,11 +1069,11 @@ function touchLastLogin(id) {
 }
 
 function listUsers() {
-    return queryAll('SELECT id, email, business_name, owner_name, role, status, plan, message_limit, rule_limit, wa_enabled, created_at, last_login_at FROM users ORDER BY created_at DESC');
+    return queryAll('SELECT id, email, business_name, owner_name, business_vertical, role, status, plan, message_limit, rule_limit, wa_enabled, created_at, last_login_at FROM users ORDER BY created_at DESC');
 }
 
 function updateUser(id, fields) {
-    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash', 'wa_enabled'];
+    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash', 'wa_enabled', 'business_vertical'];
     const sets = [];
     const params = [];
     for (const [key, value] of Object.entries(fields)) {
@@ -1358,11 +1381,11 @@ function bulkUpsertContacts(userId, rows) {
 }
 
 // ─── Message Helpers ────────────────────────────────────────
-function logMessage(userId, { waMessageId, phone, contactName, direction, messageType, body, status, templateName }) {
+function logMessage(userId, { waMessageId, phone, contactName, direction, messageType, body, status, templateName, attachmentName, attachmentMime, attachmentRef }) {
     return runSql(
-        `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [userId, waMessageId || null, phone, contactName || '', direction, messageType || 'text', body || '', status || 'sent', templateName || null]
+        `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name, attachment_name, attachment_mime, attachment_ref)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, waMessageId || null, phone, contactName || '', direction, messageType || 'text', body || '', status || 'sent', templateName || null, attachmentName || null, attachmentMime || null, attachmentRef || null]
     );
 }
 
@@ -1395,12 +1418,13 @@ function logOutgoingMessageIdempotent(userId, idempotencyKey, fields) {
     if (existing) return { created: false, row: existing };
     try {
         const { lastId } = runSql(
-            `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO messages (user_id, wa_message_id, phone, contact_name, direction, message_type, body, status, template_name, attachment_name, attachment_mime, attachment_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 userId, key, fields.phone, fields.contactName || '',
                 fields.direction || 'outgoing', fields.messageType || 'text',
-                fields.body || '', fields.status || 'sent', fields.templateName || null
+                fields.body || '', fields.status || 'sent', fields.templateName || null,
+                fields.attachmentName || null, fields.attachmentMime || null, fields.attachmentRef || null
             ]
         );
         return { created: true, row: queryGet('SELECT * FROM messages WHERE id = ?', [lastId]) };
@@ -1442,6 +1466,13 @@ function getMessages(userId, { phone, direction, limit = 100, offset = 0 } = {})
     sql += ' ORDER BY created_at DESC LIMIT ? OFFSET ?';
     params.push(limit, offset);
     return queryAll(sql, params);
+}
+
+function getDocumentMessageByRef(userId, reference) {
+    return queryGet(
+        "SELECT * FROM messages WHERE user_id = ? AND attachment_ref = ? AND message_type = 'document' AND status = 'sent'",
+        [userId, reference]
+    );
 }
 
 function countMessages(userId, { phone, direction } = {}) {
@@ -2225,6 +2256,14 @@ function getDashboardStats(userId) {
     const totalContacts   = queryGet('SELECT COUNT(*) as count FROM contacts WHERE user_id = ?', [userId]).count;
     const activeRules     = queryGet('SELECT COUNT(*) as count FROM chatbot_rules WHERE user_id = ? AND is_active = 1', [userId]).count;
     const pendingScheduled = queryGet("SELECT COUNT(*) as count FROM scheduled_messages WHERE user_id = ? AND status = 'pending'", [userId]).count;
+    const documentsShared = queryGet(
+        "SELECT COUNT(*) as count FROM messages WHERE user_id = ? AND message_type = 'document' AND status = 'sent'",
+        [userId]
+    ).count;
+    const upcomingAppointments = queryGet(
+        "SELECT COUNT(*) as count FROM appointments WHERE user_id = ? AND status = 'confirmed' AND start_at >= datetime('now')",
+        [userId]
+    ).count;
 
     const recentMessages = queryAll('SELECT * FROM messages WHERE user_id = ? ORDER BY created_at DESC LIMIT 10', [userId]);
 
@@ -2246,6 +2285,8 @@ function getDashboardStats(userId) {
         totalContacts,
         activeRules,
         pendingScheduled,
+        documentsShared,
+        upcomingAppointments,
         recentMessages,
         messagesByDay
     };
@@ -2293,6 +2334,7 @@ module.exports = {
     logOutgoingMessageIdempotent,
     findMessageByIdempotencyKey,
     getMessages,
+    getDocumentMessageByRef,
     countMessages,
     clearMessages,
     getConversation,

@@ -13,6 +13,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('logoutBtn').addEventListener('click', logout);
     document.getElementById('editCancelBtn').addEventListener('click', closeEditModal);
     document.getElementById('editSaveBtn').addEventListener('click', saveEditModal);
+    document.getElementById('usersBody').addEventListener('click', handleUserAction);
     document.getElementById('editModalBackdrop').addEventListener('click', (e) => {
         if (e.target.id === 'editModalBackdrop') closeEditModal();
     });
@@ -113,6 +114,7 @@ function renderUsers() {
         const rolePill = u.role === 'admin'
             ? `<span class="pill pill-admin">${Icon('crown')} Admin</span>`
             : `<span class="pill pill-user">${Icon('user')} User</span>`;
+        const verticalLabel = u.business_vertical === 'healthcare' ? 'Healthcare' : 'General / Sales';
         const wa = u.whatsapp || { connected: false, phone: null };
         const waLabel = wa.connected ? `Connected${wa.phone ? ' · ' + wa.phone : ''}` : (wa.started ? 'Connecting…' : 'Not connected');
         const s = u.stats || {};
@@ -128,11 +130,12 @@ function renderUsers() {
                 </td>
                 <td>${rolePill}</td>
                 <td>${statusPill}</td>
+                <td><span class="pill pill-user">${escapeHtml(verticalLabel)}</span></td>
                 <td>
                     <span class="wa-dot ${wa.connected ? 'connected' : ''}">${escapeHtml(waLabel)}</span>
                 </td>
                 <td style="text-align:center">
-                    ${u.role === 'admin' ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>` : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;" onclick="toggleWaAccess(${u.id}, ${u.wa_enabled ? 0 : 1})" type="button" title="${u.wa_enabled ? 'Revoke WhatsApp access' : 'Grant WhatsApp access'}">${u.wa_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}</button>`}
+                    ${u.role === 'admin' ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>` : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;" data-admin-action="toggle-wa" data-user-id="${u.id}" data-value="${u.wa_enabled ? 0 : 1}" type="button" title="${u.wa_enabled ? 'Revoke WhatsApp access' : 'Grant WhatsApp access'}">${u.wa_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}</button>`}
                 </td>
                 <td>
                     <div style="font-size:.8rem;line-height:1.5">
@@ -149,14 +152,37 @@ function renderUsers() {
                 <td style="color:var(--text-secondary);font-size:.8rem;white-space:nowrap">${formatDate(u.created_at)}</td>
                 <td>
                     <div class="row-actions">
-                        <button class="btn btn-tiny" onclick="openEditModal(${u.id})" type="button" title="Edit">${Icon('settings')}</button>
-                        ${isSelf ? '' : `<button class="btn btn-tiny" onclick="toggleStatus(${u.id}, '${u.status === 'active' ? 'suspended' : 'active'}')" type="button" title="${u.status === 'active' ? 'Suspend' : 'Activate'}">${Icon(u.status === 'active' ? 'pause' : 'play')}</button>`}
-                        ${isSelf ? '' : `<button class="btn btn-danger-sm" onclick="deleteUser(${u.id})" type="button" title="Delete">${Icon('trash-2')}</button>`}
+                        <button class="btn btn-tiny" data-admin-action="edit" data-user-id="${u.id}" type="button" title="Edit">${Icon('settings')}</button>
+                        ${isSelf ? '' : `<button class="btn btn-tiny" data-admin-action="toggle-status" data-user-id="${u.id}" data-value="${u.status === 'active' ? 'suspended' : 'active'}" type="button" title="${u.status === 'active' ? 'Suspend' : 'Activate'}">${Icon(u.status === 'active' ? 'pause' : 'play')}</button>`}
+                        ${isSelf ? '' : `<button class="btn btn-danger-sm" data-admin-action="delete" data-user-id="${u.id}" type="button" title="Delete">${Icon('trash-2')}</button>`}
                     </div>
                 </td>
             </tr>
         `;
     }).join('');
+}
+
+function handleUserAction(event) {
+    const button = event.target.closest('[data-admin-action]');
+    if (!button || !document.getElementById('usersBody').contains(button)) return;
+
+    const id = Number(button.dataset.userId);
+    if (!Number.isSafeInteger(id) || id <= 0) return;
+
+    switch (button.dataset.adminAction) {
+        case 'edit':
+            openEditModal(id);
+            break;
+        case 'toggle-status':
+            toggleStatus(id, button.dataset.value);
+            break;
+        case 'toggle-wa':
+            toggleWaAccess(id, Number(button.dataset.value));
+            break;
+        case 'delete':
+            deleteUser(id);
+            break;
+    }
 }
 
 function formatDate(dateStr) {
@@ -221,6 +247,7 @@ function openEditModal(id) {
     document.getElementById('editUserId').value = u.id;
     document.getElementById('editBusinessName').value = u.business_name || '';
     document.getElementById('editOwnerName').value = u.owner_name || '';
+    document.getElementById('editBusinessVertical').value = u.business_vertical === 'healthcare' ? 'healthcare' : 'general';
     document.getElementById('editRole').value = u.role;
     document.getElementById('editPlan').value = u.plan || 'free';
     document.getElementById('editMessageLimit').value = u.message_limit || 0;
@@ -235,6 +262,8 @@ function closeEditModal() {
 
 async function saveEditModal() {
     const id = document.getElementById('editUserId').value;
+    const selectedVertical = document.getElementById('editBusinessVertical').value;
+    const current = ALL_USERS.find(u => String(u.id) === String(id));
     const fields = {
         business_name: document.getElementById('editBusinessName').value.trim(),
         owner_name: document.getElementById('editOwnerName').value.trim(),
@@ -245,6 +274,12 @@ async function saveEditModal() {
     };
     try {
         await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify(fields) });
+        if (current && selectedVertical !== (current.business_vertical || 'general')) {
+            await api(`/api/admin/users/${id}/vertical`, {
+                method: 'PATCH',
+                body: JSON.stringify({ business_vertical: selectedVertical })
+            });
+        }
         showToast('Account updated', 'success');
         closeEditModal();
         await Promise.all([loadUsers(), loadPlatformStats()]);

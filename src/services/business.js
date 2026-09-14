@@ -1,5 +1,6 @@
-const { getSetting, setSetting, getProducts } = require('./database');
+const { getSetting, setSetting, getProducts, getUserById } = require('./database');
 const { callGeminiWithRetry, extractText, parseJsonResponse } = require('./gemini-client');
+const { BUSINESS_VERTICALS, getBusinessVertical } = require('../config/verticals');
 
 // How much of the catalog goes into a prompt. Uncapped, a tenant with 1000
 // products makes every single auto-reply enormous and slow — and the model
@@ -40,16 +41,17 @@ function getBusinessContext(userId) {
 
     const flat = (v) => String(v == null ? '' : v).replace(/[\r\n\u2028\u2029]+/g, ' ').trim();
 
+    const healthcare = getBusinessVertical(getUserById(userId)?.business_vertical) === BUSINESS_VERTICALS.HEALTHCARE;
     const lines = [];
     if (info.name)            lines.push(`Business: ${flat(info.name)}`);
     if (info.website)         lines.push(`Website: ${flat(info.website)}`);
     if (info.industry)        lines.push(`Industry: ${flat(info.industry)}`);
     if (info.description)     lines.push(`About: ${flat(info.description)}`);
-    if (info.targetCustomers) lines.push(`Target customers: ${flat(info.targetCustomers)}`);
-    if (info.offers)          lines.push(`Current offers/promotions: ${flat(info.offers)}`);
+    if (info.targetCustomers) lines.push(`${healthcare ? 'People served / contact audience' : 'Target customers'}: ${flat(info.targetCustomers)}`);
+    if (info.offers)          lines.push(`${healthcare ? 'Current service information' : 'Current offers/promotions'}: ${flat(info.offers)}`);
 
     if (info.products.length) {
-        lines.push('Products / Services catalog:');
+        lines.push(healthcare ? 'Services catalog:' : 'Products / Services catalog:');
         for (const p of info.products.slice(0, MAX_PRODUCTS_IN_CONTEXT)) {
             const bits = [flat(p.name)];
             if (p.price)        bits.push(`price: ${flat(p.price)}`);
@@ -69,7 +71,7 @@ function getBusinessContext(userId) {
     if (profileRaw) {
         try {
             const profile = JSON.parse(profileRaw);
-            if (profile && profile.profile_summary) lines.push(`Sales positioning: ${flat(profile.profile_summary)}`);
+            if (profile && profile.profile_summary) lines.push(`${healthcare ? 'Clinic communication profile' : 'Sales positioning'}: ${flat(profile.profile_summary)}`);
             if (profile && Array.isArray(profile.selling_points) && profile.selling_points.length) {
                 lines.push(`Key selling points: ${profile.selling_points.map(flat).join('; ')}`);
             }
@@ -92,6 +94,7 @@ function getBusinessContext(userId) {
  */
 async function analyzeBusinessProfile(userId) {
     const info = getBusinessInfo(userId);
+    const healthcare = getBusinessVertical(getUserById(userId)?.business_vertical) === BUSINESS_VERTICALS.HEALTHCARE;
     if (!hasBusinessInfo(info)) {
         const err = new Error('Add some business details or products first, then run the analysis.');
         err.status = 400;
@@ -104,19 +107,19 @@ async function analyzeBusinessProfile(userId) {
           ).join('\n')
         : '(no products listed)';
 
-    const systemInstruction = `You are a senior sales strategist. Analyze the business below and respond with ONLY a valid JSON object (no markdown, no code fences) with exactly these fields:
+    const systemInstruction = `${healthcare ? 'You are a healthcare clinic communication and appointment-workflow strategist. Do not provide medical advice, diagnosis, treatment recommendations, or clinical claims.' : 'You are a senior sales strategist.'} Analyze the business below and respond with ONLY a valid JSON object (no markdown, no code fences) with exactly these fields:
 
 {
-  "profile_summary": "2-3 sentence positioning summary of what this business sells and to whom",
+  "profile_summary": "2-3 sentence ${healthcare ? 'summary of the clinic/service communication profile' : 'positioning summary of what this business sells and to whom'}",
   "selling_points": ["3-6 short, concrete selling points"],
-  "ideal_customer": "1-2 sentence description of the ideal customer",
-  "sales_pitch": "a short natural WhatsApp-friendly pitch message (2-4 sentences) the owner could send to an interested lead",
-  "objection_handling": [{"objection": "common objection a customer may raise", "response": "short suggested reply"}],
-  "faq": [{"q": "likely customer question", "a": "short suggested answer"}],
-  "improvement_tips": ["2-4 practical tips to improve conversions on WhatsApp for this business"]
+  "ideal_customer": "1-2 sentence description of the ${healthcare ? 'contact audience' : 'ideal customer'}",
+  "sales_pitch": "a short natural WhatsApp-friendly ${healthcare ? 'service or appointment information' : 'pitch'} message (2-4 sentences)",
+  "objection_handling": [{"objection": "common ${healthcare ? 'administrative question or concern' : 'objection a customer may raise'}", "response": "short suggested reply"}],
+  "faq": [{"q": "likely ${healthcare ? 'service or appointment' : 'customer'} question", "a": "short suggested answer"}],
+  "improvement_tips": ["2-4 practical tips to improve ${healthcare ? 'WhatsApp service communication and booking workflow' : 'conversions on WhatsApp'}"]
 }
 
-Keep everything concise and practical. Use the same currency the business uses (${String(info.currency).slice(0, 8)}).`;
+Keep everything concise and practical. ${healthcare ? 'Keep all content administrative and do not invent clinical facts.' : `Use the same currency the business uses (${String(info.currency).slice(0, 8)}).`}`;
 
     const userText = `BUSINESS DETAILS:
 Name: ${info.name || '(not set)'}

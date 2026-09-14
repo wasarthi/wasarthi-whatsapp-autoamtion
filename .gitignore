@@ -25,6 +25,9 @@ data/
 *.sqlite
 *.db
 
+# Tenant-scoped uploaded documents are runtime data, never source assets.
+documents/
+
 # Test isolation directories (per-test PERSIST_ROOT)
 test-data/
 

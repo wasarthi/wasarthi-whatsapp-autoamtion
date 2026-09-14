@@ -9,6 +9,7 @@ const { getStatus, destroyClientForUser } = require('../services/whatsapp-client
 const { revokeAllSessionsForUser } = require('../config/auth');
 const { requireId, optionalString, clampInt, requireEnum, LIMITS } = require('../utils/validate');
 const { asyncHandler } = require('../utils/errors');
+const { BUSINESS_VERTICALS } = require('../config/verticals');
 
 function publicUser(u) {
     if (!u) return null;
@@ -40,6 +41,17 @@ router.get('/users/:id', (req, res) => {
     const wa = getStatus(user.id);
     res.json({ success: true, data: { ...publicUser(user), stats, whatsapp: wa } });
 });
+
+// Kept apart from the generic account editor: vertical selection changes
+// product behaviour and is exclusively a platform-administration action.
+router.patch('/users/:id/vertical', asyncHandler(async (req, res) => {
+    const id = requireId(req.params.id, 'user id');
+    const target = getUserById(id);
+    if (!target) return res.status(404).json({ success: false, error: 'User not found' });
+    const body = (req.body && typeof req.body === 'object' && !Array.isArray(req.body)) ? req.body : {};
+    const business_vertical = requireEnum(body.business_vertical, Object.values(BUSINESS_VERTICALS), 'business_vertical');
+    res.json({ success: true, data: publicUser(updateUser(id, { business_vertical })) });
+}));
 
 // ─── Suspend / activate / change plan / set limits / change role ──
 router.patch('/users/:id', asyncHandler(async (req, res) => {

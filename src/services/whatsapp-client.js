@@ -93,6 +93,7 @@ function newSessionState() {
         isInitializing: false,
         restartTimer: null,
         crashCount: 0,
+        isRestarting: false,
         lastCrashTime: Date.now(),
         lastError: null,
         startedAt: null,
@@ -308,6 +309,7 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
     s.lastCrashTime = now;
 
     if (s.crashCount > MAX_CRASHES_BEFORE_GIVING_UP) {
+        s.isRestarting = false;
         s.lastError = `Stopped reconnecting after ${s.crashCount - 1} consecutive failures.`;
         console.error(`❌ [user ${userId}] ${s.lastError} Reconnect manually from the dashboard.`);
         broadcastSSE(userId, {
@@ -325,10 +327,11 @@ function scheduleRestart(userId, baseDelayMs = 8000) {
     console.log(`🔄 [user ${userId}] Scheduling WhatsApp restart in ${(backoff / 1000).toFixed(0)}s (failure #${s.crashCount})...`);
 
     broadcastSSE(userId, { type: 'disconnected' });
+    s.isRestarting = true;
 
     s.restartTimer = setTimeout(async () => {
         s.restartTimer = null;
-        if (s.destroyed) return;
+        if (s.destroyed) { s.isRestarting = false; return; }
         await safeDestroyClient(s, userId);
         s.isInitializing = false;
         initWhatsAppClient(userId);
@@ -385,6 +388,8 @@ function initWhatsAppClient(userId) {
         throw new Error('initWhatsAppClient requires a positive integer userId');
     }
     const s = getSession(userId);
+    const isAutomaticRetry = s.isRestarting === true;
+    s.isRestarting = false;
     s.destroyed = false;
     s.userDisconnected = false;
 
@@ -412,7 +417,7 @@ function initWhatsAppClient(userId) {
     s.isInitializing = true;
     s.startedAt = Date.now();
     s.lastError = null;
-    s.crashCount = 0;
+    if (!isAutomaticRetry) s.crashCount = 0;
     clearTimers(s);
 
     console.log(`🔧 [user ${userId}] Starting WhatsApp Web client...`);

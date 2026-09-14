@@ -89,6 +89,11 @@ function requireAdmin(req, res, next) {
     });
 }
 
+/** Semantic platform-administration guard; currently the existing admin role. */
+function requireSystemAdmin(req, res, next) {
+    return requireAdmin(req, res, next);
+}
+
 /** Best-effort — attaches req.user if a valid session exists, but never blocks. */
 function optionalAuth(req, res, next) {
     const { user, payload } = resolveSession(req);
@@ -99,7 +104,7 @@ function optionalAuth(req, res, next) {
     next();
 }
 
-module.exports = { requireAuth, requireAdmin, optionalAuth, resolveSession };
+module.exports = { requireAuth, requireAdmin, requireSystemAdmin, optionalAuth, resolveSession };
 
 
 

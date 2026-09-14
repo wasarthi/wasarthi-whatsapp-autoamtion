@@ -4,7 +4,7 @@ const router = express.Router();
 const {
     getContacts, countContacts, upsertContact, bulkUpsertContacts, deleteContact,
     getContactByPhone, getContactsByIds,
-    getMessages, countMessages, getConversation,
+    getMessages, countMessages, getConversation, getDocumentMessageByRef,
     getChatbotRules, createChatbotRule, updateChatbotRule, deleteChatbotRule, countChatbotRules,
     getScheduledMessages, createScheduledMessage, cancelScheduledMessage, countPendingScheduledMessages,
     getAllSettings, setSetting, getSetting,
@@ -25,6 +25,7 @@ const { analyzeBusinessProfile, getBusinessInfo } = require('../services/busines
 const { parseCSV, mapContactRow } = require('../services/csv');
 const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_JOB } = require('../services/outreach');
 const { asyncHandler } = require('../utils/errors');
+const { maxDocumentBytes, multipartBody, validateDocument, createTemporaryDocument, persistTemporaryDocument, privateDocumentPath, cleanupTemporaryDocument } = require('../utils/document-upload');
 const { perUser, concurrencyGate } = require('../middleware/rateLimit');
 const {
     LIMITS, ValidationError,
@@ -369,6 +370,24 @@ router.get('/messages/conversation/:phone', (req, res) => {
     res.json({ success: true, data: messages });
 });
 
+// Private attachment delivery: the reference is opaque, its path is derived
+// server-side, and the message lookup is always scoped to the signed-in user.
+router.get('/documents/:reference', (req, res) => {
+    const reference = String(req.params.reference || '');
+    const message = getDocumentMessageByRef(req.user.id, reference);
+    const filePath = message && privateDocumentPath(req.user.id, reference);
+    if (!filePath || !require('fs').existsSync(filePath)) return res.status(404).json({ success: false, error: 'Document not found' });
+    // This protected response is shown only in the authenticated dashboard's
+    // same-origin document modal. The app-wide anti-framing policy would
+    // otherwise prevent a browser PDF viewer from rendering it there.
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Content-Security-Policy', "default-src 'none'; base-uri 'none'; frame-ancestors 'self'");
+    res.setHeader('Content-Type', message.attachment_mime || 'application/octet-stream');
+    res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(message.attachment_name || 'document')}`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    require('fs').createReadStream(filePath).on('error', () => res.destroy()).pipe(res);
+});
+
 // Danger Zone → Clear Message History: permanently deletes this account's own message log.
 router.delete('/messages', writeLimiter, (req, res) => {
     clearMessages(req.user.id);
@@ -397,11 +416,14 @@ router.delete('/messages', writeLimiter, (req, res) => {
  * leaves the exact window this is meant to close: two concurrent requests
  * would both find no record, both send, and only then both try to log.
  */
-router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
+router.post('/messages/send', express.raw({ type: req => /^multipart\/form-data/i.test(req.headers['content-type'] || ''), limit: maxDocumentBytes() + 64 * 1024 }), multipartBody, sendLimiter, requireDurableWrite, asyncHandler(async (req, res) => {
     const uid = req.user.id;
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
-    const text = requireString(body.body, 'body', { max: LIMITS.MESSAGE_BODY });
+    const document = validateDocument(req.document);
+    const text = optionalString(body.body, 'body', LIMITS.MESSAGE_BODY);
+    if (!text && !document) throw new ValidationError('Enter a message or attach a document.', 'body');
+    const messageType = document ? 'document' : 'text';
 
     const rawKey = req.get('Idempotency-Key') || body.idempotencyKey;
     const idempotencyKey = rawKey === undefined || rawKey === null || rawKey === ''
@@ -411,6 +433,13 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
     if (idempotencyKey) {
         const already = findMessageByIdempotencyKey(uid, idempotencyKey);
         if (already) {
+            if (already.status === 'failed') {
+                return res.status(409).json({
+                    success: false,
+                    error: 'The previous send with this request key failed. Submit again to start a new send.',
+                    code: 'IDEMPOTENT_SEND_FAILED'
+                });
+            }
             // 200 with a flag, not an error: the caller's intent was carried
             // out exactly once, which is what they asked for.
             return res.json({
@@ -434,18 +463,31 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         const claim = logOutgoingMessageIdempotent(uid, idempotencyKey, {
             phone,
             direction: 'outgoing',
-            messageType: 'text',
+            messageType,
             body: text,
+            attachmentName: document?.filename,
+            attachmentMime: document?.mimetype,
+            attachmentRef: document ? 'pending' : null,
             status: 'pending'
         });
         if (!claim.created) {
+            if (claim.row.status === 'failed') {
+                return res.status(409).json({ success: false, error: 'The previous send with this request key failed. Submit again to start a new send.', code: 'IDEMPOTENT_SEND_FAILED' });
+            }
             return res.json({ success: true, data: { duplicate: true, loggedAt: claim.row.created_at } });
         }
     }
 
     let result;
+    let temporaryDocument = null;
     try {
-        result = await sendTextMessage(uid, phone, text);
+        if (document) {
+            temporaryDocument = createTemporaryDocument(uid, document);
+            result = await sendMediaMessage(uid, phone, temporaryDocument.buffer.toString('base64'), temporaryDocument.mimetype, temporaryDocument.filename, text);
+            temporaryDocument = persistTemporaryDocument(uid, temporaryDocument);
+        } else {
+            result = await sendTextMessage(uid, phone, text);
+        }
     } catch (err) {
         // The claim row stays, marked failed, so a retry with the same key
         // reports the failure rather than silently re-sending — the caller
@@ -462,14 +504,16 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
         }
         err.status = err.status || 502;
         throw err;
+    } finally {
+        cleanupTemporaryDocument(temporaryDocument);
     }
 
     if (idempotencyKey) {
         const row = findMessageByIdempotencyKey(uid, idempotencyKey);
         if (row) {
             transaction(() => {
-                require('../services/database').getDb().run(
-                    "UPDATE messages SET status = 'sent' WHERE id = ?", [row.id]
+                    require('../services/database').getDb().run(
+                    "UPDATE messages SET status = 'sent', attachment_ref = COALESCE(?, attachment_ref) WHERE id = ?", [temporaryDocument?.reference || null, row.id]
                 );
             });
         }
@@ -478,9 +522,12 @@ router.post('/messages/send', sendLimiter, requireDurableWrite, asyncHandler(asy
             waMessageId: result?.id?._serialized || result?.messageId || null,
             phone,
             direction: 'outgoing',
-            messageType: 'text',
+            messageType,
             body: text,
-            status: 'sent'
+            status: 'sent',
+            attachmentName: temporaryDocument?.filename,
+            attachmentMime: temporaryDocument?.mimetype,
+            attachmentRef: temporaryDocument?.reference
         });
     }
 
