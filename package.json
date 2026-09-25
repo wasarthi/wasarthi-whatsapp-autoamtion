@@ -12,7 +12,7 @@
     "test:integration": "jest tests/tenant-isolation.test.js --detectOpenHandles",
     "test:security": "jest tests/auth.security.test.js --detectOpenHandles",
     "test:watch": "jest --watch",
-    "lint": "node -c src/**/*.js src/**/**/*.js server.js",
+    "lint": "node scripts/check-syntax.js",
     "db:init": "node -e \"require('./src/database').initDatabase().then(()=>console.log('Database initialized'))\"",
     "db:migrate": "node -e \"require('./src/database').initDatabase().then(()=>{const db=require('./src/database');console.log('Schema version:',db.getSchemaVersion());console.log('Migrations:',db.MIGRATIONS.map(m=>m.name).join(', '));})\"",
     "admin:create": "node scripts/dev/make-admin.js",

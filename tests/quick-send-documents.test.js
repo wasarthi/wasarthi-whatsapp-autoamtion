@@ -2,8 +2,12 @@ const request = require('supertest');
 const fs = require('fs');
 const path = require('path');
 
-async function readyUser(email) {
+async function readyUser(email, { vertical = 'general', documentSendEnabled = 1 } = {}) {
     const user = await createUserDirect({ email });
+    require('../src/services/database').updateUser(user.user.id, {
+        business_vertical: vertical,
+        document_send_enabled: documentSendEnabled
+    });
     const wa = require('../src/services/whatsapp-client');
     const lib = require('whatsapp-web.js');
     wa.initWhatsAppClient(user.user.id);
@@ -24,10 +28,88 @@ describe('Quick Send documents', () => {
     beforeEach(async () => { await freshDatabase(); app = createTestApp(); });
 
     test('keeps text-only sends working', async () => {
-        const user = await readyUser('text@example.com');
+        const user = await readyUser('text@example.com', { documentSendEnabled: 0 });
         const res = await request(app).post('/api/messages/send').set('Cookie', user.cookie).send({ phone: '919876543210', body: 'hello' });
         expect(res.status).toBe(200);
         expect(require('whatsapp-web.js').__last().sent[0].text).toBe('hello');
+    });
+
+    test('healthcare user can send PDF even when document flag is off', async () => {
+        const user = await readyUser('healthcare-doc@example.com', { vertical: 'healthcare', documentSendEnabled: 0 });
+        const res = await send(app, user, { name: 'care.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.7 care') });
+        expect(res.status).toBe(200);
+        expect(require('../src/services/database').getMessages(user.user.id)[0].message_type).toBe('document');
+    });
+
+    test('healthcare user can send normal text', async () => {
+        const user = await readyUser('healthcare-text@example.com', { vertical: 'healthcare', documentSendEnabled: 0 });
+        const res = await request(app).post('/api/messages/send').set('Cookie', user.cookie).send({ phone: '919876543210', body: 'hello clinic' });
+        expect(res.status).toBe(200);
+        expect(require('whatsapp-web.js').__last().sent[0].text).toBe('hello clinic');
+    });
+
+    test('sales user with document permission ON can send PDF', async () => {
+        const user = await readyUser('sales-doc-on@example.com', { documentSendEnabled: 1 });
+        const res = await send(app, user, { name: 'sales.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.7 sales') });
+        expect(res.status).toBe(200);
+        expect(require('whatsapp-web.js').__last().sent).toHaveLength(1);
+    });
+
+    test('sales user with document permission OFF cannot send PDF', async () => {
+        const user = await readyUser('sales-doc-off@example.com', { documentSendEnabled: 0 });
+        const res = await send(app, user, { name: 'blocked.pdf', type: 'application/pdf', data: Buffer.from('%PDF-1.7 blocked') });
+        expect(res.status).toBe(403);
+        expect(res.body.code).toBe('DOCUMENT_SEND_DISABLED');
+        expect(require('whatsapp-web.js').__last().sent).toHaveLength(0);
+    });
+
+    test('sales user with document permission OFF can still send text', async () => {
+        const user = await readyUser('sales-text-off@example.com', { documentSendEnabled: 0 });
+        const res = await request(app).post('/api/messages/send').set('Cookie', user.cookie).send({ phone: '919876543210', body: 'text only' });
+        expect(res.status).toBe(200);
+        expect(require('whatsapp-web.js').__last().sent[0].text).toBe('text only');
+    });
+
+    test('admin can enable and disable document sending', async () => {
+        const db = require('../src/services/database');
+        const admin = await createUserDirect({ email: 'admin-docs@example.com' });
+        const user = await createUserDirect({ email: 'managed-docs@example.com' });
+        db.updateUser(admin.user.id, { role: 'admin' });
+
+        const enabled = await request(app)
+            .patch(`/api/admin/users/${user.user.id}`)
+            .set('Cookie', admin.cookie)
+            .send({ document_send_enabled: 1 });
+        expect(enabled.status).toBe(200);
+        expect(enabled.body.data.document_send_enabled).toBe(1);
+
+        const disabled = await request(app)
+            .patch(`/api/admin/users/${user.user.id}`)
+            .set('Cookie', admin.cookie)
+            .send({ document_send_enabled: 0 });
+        expect(disabled.status).toBe(200);
+        expect(disabled.body.data.document_send_enabled).toBe(0);
+    });
+
+    test('non-admin cannot modify another user document permission', async () => {
+        const actor = await createUserDirect({ email: 'not-admin-docs@example.com' });
+        const target = await createUserDirect({ email: 'target-docs@example.com' });
+        const res = await request(app)
+            .patch(`/api/admin/users/${target.user.id}`)
+            .set('Cookie', actor.cookie)
+            .send({ document_send_enabled: 1 });
+        expect(res.status).toBe(403);
+        expect(require('../src/services/database').getUserById(target.user.id).document_send_enabled).toBe(0);
+    });
+
+    test('frontend hides and disables document upload when permission is OFF', () => {
+        const html = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+        const js = fs.readFileSync(path.join(__dirname, '..', 'public', 'js', 'app.js'), 'utf8');
+        expect(html).toContain('id="quickSendDocumentField"');
+        expect(js).toContain('function canCurrentUserSendDocuments()');
+        expect(js).toContain("field.style.display = allowed ? '' : 'none'");
+        expect(js).toContain('input.disabled = !allowed');
+        expect(js).toContain('Document sending is not enabled for your account.');
     });
 
     test('sends a document alone and records safe metadata', async () => {

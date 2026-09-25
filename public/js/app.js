@@ -29,6 +29,7 @@ async function checkAuth() {
         if (avatarEl) avatarEl.textContent = label.slice(0, 2).toUpperCase();
         if (adminNav) adminNav.style.display = CURRENT_USER.role === 'admin' ? '' : 'none';
         applyVerticalContext(CURRENT_USER.business_vertical);
+        applyDocumentSendPermission();
 
         return true;
     } catch (err) {
@@ -95,6 +96,31 @@ function applyVerticalContext(vertical) {
 
     document.querySelectorAll('.vertical-sales-only').forEach(el => { el.style.display = context.salesPipeline ? '' : 'none'; });
     document.querySelectorAll('.vertical-healthcare-only').forEach(el => { el.style.display = healthcare ? 'flex' : 'none'; });
+}
+
+function canCurrentUserSendDocuments() {
+    return CURRENT_USER &&
+        (CURRENT_USER.business_vertical === 'healthcare' ||
+         CURRENT_USER.document_send_enabled === 1 ||
+         CURRENT_USER.document_send_enabled === true);
+}
+
+function applyDocumentSendPermission() {
+    const allowed = canCurrentUserSendDocuments();
+    const field = document.getElementById('quickSendDocumentField');
+    const input = document.getElementById('qsDocument');
+    const button = document.getElementById('quickSendBtn');
+    if (field) field.style.display = allowed ? '' : 'none';
+    if (input) {
+        input.disabled = !allowed;
+        if (!allowed) input.value = '';
+    }
+    document.getElementById('qsAttachmentMeta')?.classList.remove('is-visible');
+    if (button) {
+        button.innerHTML = allowed
+            ? `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message / Document`
+            : `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message`;
+    }
 }
 
 async function logout() {
@@ -2485,6 +2511,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         document.getElementById('qsAttachmentMeta').classList.toggle('is-visible', Boolean(file));
         document.getElementById('qsAttachmentName').textContent = file ? file.name : '';
     };
+    applyDocumentSendPermission();
     qsDocument.addEventListener('change', renderQuickSendAttachment);
     document.getElementById('qsClearDocument').addEventListener('click', () => { qsDocument.value = ''; renderQuickSendAttachment(); });
     document.getElementById('documentModalClose').addEventListener('click', closeDocumentModal);
@@ -2494,6 +2521,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         const phone   = document.getElementById('qsPhone').value.trim();
         const message = document.getElementById('qsMessage').value.trim();
         const documentFile = document.getElementById('qsDocument').files[0];
+        if (documentFile && !canCurrentUserSendDocuments()) { showToast('Document sending is not enabled for your account.', 'error'); return; }
         if (!phone || (!message && !documentFile)) { showToast('Enter a phone number and a message or document.', 'error'); return; }
 
         const btn = document.getElementById('quickSendBtn');
@@ -2524,7 +2552,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             showToast(err.message || 'Failed to send message', 'error');
         } finally {
             btn.disabled = false;
-            btn.innerHTML = `<span class="btn-icon" aria-hidden="true">${Icon('send')}</span> Send Message / Document`;
+            applyDocumentSendPermission();
         }
     });
 

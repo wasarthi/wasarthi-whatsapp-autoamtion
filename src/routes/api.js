@@ -27,6 +27,7 @@ const { startOutreachJob, getOutreachJob, cancelOutreachJob, MAX_RECIPIENTS_PER_
 const { asyncHandler } = require('../utils/errors');
 const { maxDocumentBytes, multipartBody, validateDocument, createTemporaryDocument, persistTemporaryDocument, privateDocumentPath, cleanupTemporaryDocument } = require('../utils/document-upload');
 const { perUser, concurrencyGate } = require('../middleware/rateLimit');
+const { BUSINESS_VERTICALS, getBusinessVertical } = require('../config/verticals');
 const {
     LIMITS, ValidationError,
     requireString, optionalString, normalizePhone, clampInt, clampNumber,
@@ -109,6 +110,12 @@ function withAiSlot(handler) {
 function requireDurableWrite(req, res, next) {
     assertPersistable();
     next();
+}
+
+function canSendDocuments(user) {
+    return getBusinessVertical(user?.business_vertical) === BUSINESS_VERTICALS.HEALTHCARE ||
+        user?.document_send_enabled === 1 ||
+        user?.document_send_enabled === true;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -420,6 +427,13 @@ router.post('/messages/send', express.raw({ type: req => /^multipart\/form-data/
     const uid = req.user.id;
     const body = req.body || {};
     const phone = normalizePhone(body.phone);
+    if (req.document && !canSendDocuments(req.user)) {
+        return res.status(403).json({
+            success: false,
+            error: 'Document sending is not enabled for your account. You can still send text messages.',
+            code: 'DOCUMENT_SEND_DISABLED'
+        });
+    }
     const document = validateDocument(req.document);
     const text = optionalString(body.body, 'body', LIMITS.MESSAGE_BODY);
     if (!text && !document) throw new ValidationError('Enter a message or attach a document.', 'body');

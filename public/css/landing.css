@@ -117,7 +117,7 @@ img, svg { display: block; }
     padding: 12px 28px;
 }
 .landing-nav .container { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1.15rem; color: #fff; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1rem; line-height: 1.2; color: #fff; }
 .brand-mark {
     width: 36px; height: 36px; border-radius: 10px;
     background: var(--grad-primary);
@@ -546,7 +546,7 @@ img, svg { display: block; }
     flex-wrap: wrap;
     gap: 14px;
 }
-.admin-topbar .brand { color: #fff; }
+.admin-topbar .brand { color: #fff; flex-wrap: wrap; }
 .admin-topbar-actions { display: flex; align-items: center; gap: 14px; }
 .admin-badge {
     background: rgba(217,180,91,.18);
@@ -605,7 +605,14 @@ img, svg { display: block; }
 }
 .admin-search .icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--text-secondary); }
 
-.admin-table { width: 100%; border-collapse: collapse; }
+.admin-table-scroll {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+.admin-table { width: 100%; min-width: 1320px; border-collapse: collapse; }
 .admin-table th {
     text-align: left; font-size: .72rem; text-transform: uppercase; letter-spacing: .04em;
     color: var(--text-secondary); font-weight: 700; padding: 12px 22px; background: var(--cream-subtle);
@@ -658,7 +665,7 @@ img, svg { display: block; }
 
 @media (max-width: 900px) {
     .admin-stats-grid { grid-template-columns: repeat(2, 1fr); }
-    .admin-table { display: block; overflow-x: auto; white-space: nowrap; }
+    .admin-table { white-space: nowrap; }
 }
 
 /* Toast (shared minimal) */

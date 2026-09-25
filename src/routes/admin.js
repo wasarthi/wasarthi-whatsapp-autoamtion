@@ -78,6 +78,7 @@ router.patch('/users/:id', asyncHandler(async (req, res) => {
     if (business_name !== undefined) fields.business_name = optionalString(business_name, 'business_name', LIMITS.CONTACT_NAME);
     if (owner_name !== undefined)    fields.owner_name = optionalString(owner_name, 'owner_name', LIMITS.CONTACT_NAME);
     if (body.wa_enabled !== undefined) fields.wa_enabled = body.wa_enabled ? 1 : 0;
+    if (body.document_send_enabled !== undefined) fields.document_send_enabled = body.document_send_enabled ? 1 : 0;
 
     const updated = updateUser(id, fields);
 

@@ -469,6 +469,15 @@ const MIGRATIONS = [
                 db.run("ALTER TABLE users ADD COLUMN business_vertical TEXT NOT NULL DEFAULT 'general' CHECK(business_vertical IN ('general', 'healthcare'))");
             }
         }
+    },
+    {
+        version: 13,
+        name: 'users.document_send_enabled: admin-controlled document sending',
+        up: () => {
+            if (!tableHasColumn('users', 'document_send_enabled')) {
+                db.run('ALTER TABLE users ADD COLUMN document_send_enabled INTEGER NOT NULL DEFAULT 0');
+            }
+        }
     }
 ];
 
@@ -635,6 +644,7 @@ async function initDatabase() {
             message_limit INTEGER DEFAULT 0,
             rule_limit INTEGER DEFAULT 0,
             wa_enabled INTEGER DEFAULT 0,
+            document_send_enabled INTEGER NOT NULL DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
             last_login_at DATETIME
         )
@@ -1069,11 +1079,11 @@ function touchLastLogin(id) {
 }
 
 function listUsers() {
-    return queryAll('SELECT id, email, business_name, owner_name, business_vertical, role, status, plan, message_limit, rule_limit, wa_enabled, created_at, last_login_at FROM users ORDER BY created_at DESC');
+    return queryAll('SELECT id, email, business_name, owner_name, business_vertical, role, status, plan, message_limit, rule_limit, wa_enabled, document_send_enabled, created_at, last_login_at FROM users ORDER BY created_at DESC');
 }
 
 function updateUser(id, fields) {
-    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash', 'wa_enabled', 'business_vertical'];
+    const allowed = ['business_name', 'owner_name', 'status', 'plan', 'message_limit', 'rule_limit', 'role', 'password_hash', 'wa_enabled', 'document_send_enabled', 'business_vertical'];
     const sets = [];
     const params = [];
     for (const [key, value] of Object.entries(fields)) {

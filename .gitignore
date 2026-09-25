@@ -12,6 +12,11 @@ opencode.json
 # Tooling binaries that shouldn't be in the repo
 *.exe
 
+# Local SSH keys and deployment credentials
+keys/
+*.pem
+*.key
+
 # WhatsApp Web Session & Auth Data (CRITICAL: Do not commit tokens)
 .wwebjs_auth/
 .wwebjs_cache/

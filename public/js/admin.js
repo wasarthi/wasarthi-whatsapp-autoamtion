@@ -115,10 +115,14 @@ function renderUsers() {
             ? `<span class="pill pill-admin">${Icon('crown')} Admin</span>`
             : `<span class="pill pill-user">${Icon('user')} User</span>`;
         const verticalLabel = u.business_vertical === 'healthcare' ? 'Healthcare' : 'General / Sales';
+        const healthcare = u.business_vertical === 'healthcare';
         const wa = u.whatsapp || { connected: false, phone: null };
         const waLabel = wa.connected ? `Connected${wa.phone ? ' · ' + wa.phone : ''}` : (wa.started ? 'Connecting…' : 'Not connected');
         const s = u.stats || {};
         const isSelf = CURRENT_ADMIN && u.id === CURRENT_ADMIN.id;
+        const documentsCell = healthcare
+            ? `<span class="pill pill-active" title="Healthcare document sending is always enabled">${Icon('check-circle')} Always</span>`
+            : `<button class="btn btn-tiny" style="background:${u.document_send_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;" data-admin-action="toggle-documents" data-user-id="${u.id}" data-value="${u.document_send_enabled ? 0 : 1}" type="button" title="${u.document_send_enabled ? 'Disable document sending' : 'Enable document sending'}">${u.document_send_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}</button>`;
 
         return `
             <tr>
@@ -137,6 +141,7 @@ function renderUsers() {
                 <td style="text-align:center">
                     ${u.role === 'admin' ? `<span class="pill pill-admin" title="Admins always have access">${Icon('crown')} Always</span>` : `<button class="btn btn-tiny" style="background:${u.wa_enabled ? 'var(--color-success)' : 'var(--color-error)'};color:#fff;font-size:.75rem;" data-admin-action="toggle-wa" data-user-id="${u.id}" data-value="${u.wa_enabled ? 0 : 1}" type="button" title="${u.wa_enabled ? 'Revoke WhatsApp access' : 'Grant WhatsApp access'}">${u.wa_enabled ? Icon('check-circle') + ' Enabled' : Icon('x-circle') + ' Disabled'}</button>`}
                 </td>
+                <td style="text-align:center">${documentsCell}</td>
                 <td>
                     <div style="font-size:.8rem;line-height:1.5">
                         <div>${s.messagesThisMonth || 0} msgs this month</div>
@@ -178,6 +183,9 @@ function handleUserAction(event) {
             break;
         case 'toggle-wa':
             toggleWaAccess(id, Number(button.dataset.value));
+            break;
+        case 'toggle-documents':
+            toggleDocumentAccess(id, Number(button.dataset.value));
             break;
         case 'delete':
             deleteUser(id);
@@ -224,6 +232,20 @@ async function toggleWaAccess(id, newValue) {
         await loadUsers();
     } catch (err) {
         showToast(err.message || 'Could not update WhatsApp access', 'error');
+    }
+}
+
+// ─── Grant / revoke General/Sales document sending ─────────────
+async function toggleDocumentAccess(id, newValue) {
+    const enabling = newValue === 1;
+    const label = enabling ? 'Enable document sending for this General / Sales user?' : 'Disable document sending? Text messages will still work.';
+    if (!confirm(label)) return;
+    try {
+        await api(`/api/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ document_send_enabled: newValue }) });
+        showToast(enabling ? 'Document sending enabled' : 'Document sending disabled', 'success');
+        await loadUsers();
+    } catch (err) {
+        showToast(err.message || 'Could not update document sending', 'error');
     }
 }
 

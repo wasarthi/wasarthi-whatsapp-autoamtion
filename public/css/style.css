@@ -76,7 +76,7 @@
     --shadow-green: 0 6px 18px rgba(20, 140, 80, 0.28);
 
     /* Layout */
-    --sidebar-w: 250px;
+    --sidebar-w: 280px;
     --topbar-h:  62px;
 
     --focus-ring: 0 0 0 3px rgba(27, 148, 87, 0.22);
@@ -244,9 +244,11 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 .logo-title {
     font-family: var(--font-display);
     font-weight: 800;
-    font-size: 1.02rem;
+    font-size: 0.9rem;
+    line-height: 1.2;
     color: #FBF8EE;
     letter-spacing: -0.01em;
+    white-space: normal;
 }
 
 .logo-subtitle {
@@ -466,7 +468,9 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 .mobile-title {
     font-family: var(--font-display);
     font-weight: 700;
-    font-size: 1rem;
+    font-size: 0.86rem;
+    line-height: 1.15;
+    min-width: 0;
 }
 
 .hamburger {
