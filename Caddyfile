@@ -1,16 +1,25 @@
 # Caddy configuration for WA Sarthi
-# Listens on port 80 (HTTP) for direct IP access without SSL redirect errors.
-# To add automatic HTTPS for a custom domain, replace :80 with yourdomain.com.
+# Supports both HTTP (80) and HTTPS (443 with self-signed for direct IP access)
 :80 {
-    # SSE (Server-Sent Events) stream for QR code / connection status.
     @sse path /api/qr-stream
     handle @sse {
         reverse_proxy app:3000 {
             flush_interval -1
         }
     }
+    reverse_proxy app:3000 {
+        flush_interval 100ms
+    }
+}
 
-    # All other requests
+:443 {
+    tls internal
+    @sse path /api/qr-stream
+    handle @sse {
+        reverse_proxy app:3000 {
+            flush_interval -1
+        }
+    }
     reverse_proxy app:3000 {
         flush_interval 100ms
     }
