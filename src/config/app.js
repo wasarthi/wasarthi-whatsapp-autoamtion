@@ -61,6 +61,7 @@ function createApp() {
     // sends their session cookie over cleartext once before any redirect.
     if (process.env.FORCE_HTTPS === 'true') {
         app.use((req, res, next) => {
+            if (req.path === '/health' || req.path === '/ready') return next();
             if (req.secure || req.get('X-Forwarded-Proto') === 'https') return next();
             if (req.method !== 'GET' && req.method !== 'HEAD') {
                 return res.status(403).json({ success: false, error: 'HTTPS is required.' });
