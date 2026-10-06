@@ -223,6 +223,21 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
     display: flex;
     align-items: center;
     gap: 12px;
+    text-decoration: none;
+}
+
+.logo-brand-img {
+    width: 42px;
+    height: 42px;
+    object-fit: contain;
+    flex-shrink: 0;
+    filter: drop-shadow(0 3px 10px rgba(0, 0, 0, 0.35));
+    border-radius: 10px;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.logo:hover .logo-brand-img {
+    transform: scale(1.05);
 }
 
 .logo-icon {
@@ -244,17 +259,27 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
 .logo-title {
     font-family: var(--font-display);
     font-weight: 800;
-    font-size: 0.9rem;
-    line-height: 1.2;
+    font-size: 1.05rem;
+    line-height: 1.15;
     color: #FBF8EE;
     letter-spacing: -0.01em;
     white-space: normal;
 }
 
+.logo-tagline {
+    font-size: 0.62rem;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #34d399;
+    font-weight: 700;
+    line-height: 1.2;
+    margin-top: 1px;
+}
+
 .logo-subtitle {
     font-size: 0.72rem;
     color: rgba(251, 248, 238, 0.55);
-    margin-top: 1px;
+    margin-top: 2px;
 }
 
 .sidebar-nav {
@@ -465,12 +490,29 @@ h1, h2, h3, h4 { font-family: var(--font-display); letter-spacing: -0.015em; }
     box-shadow: var(--shadow-md);
 }
 
+.mobile-brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.mobile-brand-icon {
+    width: 28px;
+    height: 28px;
+    object-fit: contain;
+    flex-shrink: 0;
+    filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.3));
+    border-radius: 6px;
+}
+
 .mobile-title {
     font-family: var(--font-display);
-    font-weight: 700;
-    font-size: 0.86rem;
+    font-weight: 800;
+    font-size: 0.98rem;
     line-height: 1.15;
     min-width: 0;
+    letter-spacing: -0.01em;
 }
 
 .hamburger {

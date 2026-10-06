@@ -117,7 +117,38 @@ img, svg { display: block; }
     padding: 12px 28px;
 }
 .landing-nav .container { display: flex; align-items: center; justify-content: space-between; width: 100%; }
-.brand { display: flex; align-items: center; gap: 10px; font-weight: 800; font-size: 1rem; line-height: 1.2; color: #fff; }
+.brand { display: flex; align-items: center; gap: 11px; font-weight: 800; font-size: 1rem; line-height: 1.2; color: #fff; text-decoration: none; }
+.brand-logo-img {
+    width: 38px;
+    height: 38px;
+    object-fit: contain;
+    flex-shrink: 0;
+    filter: drop-shadow(0 3px 8px rgba(0, 0, 0, 0.3));
+    border-radius: 8px;
+    transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.brand:hover .brand-logo-img {
+    transform: scale(1.05);
+}
+.brand-text {
+    display: flex;
+    flex-direction: column;
+}
+.brand-title {
+    font-weight: 800;
+    font-size: 1.05rem;
+    color: #fff;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+}
+.brand-sub {
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--green-300);
+    line-height: 1.15;
+}
 .brand-mark {
     width: 36px; height: 36px; border-radius: 10px;
     background: var(--grad-primary);
@@ -469,7 +500,38 @@ img, svg { display: block; }
     padding: 60px;
 }
 .auth-visual-inner { position: relative; z-index: 2; max-width: 420px; }
-.auth-visual h2 { color: #fff; font-size: 1.9rem; font-weight: 800; line-height: 1.25; margin: 26px 0 16px; }
+.brand-visual-header {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    text-decoration: none;
+    margin-bottom: 24px;
+}
+.auth-visual-logo-img {
+    width: 44px;
+    height: 44px;
+    object-fit: contain;
+    flex-shrink: 0;
+    filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.4));
+    border-radius: 10px;
+}
+.brand-visual-title {
+    font-weight: 800;
+    font-size: 1.25rem;
+    color: #fff;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+}
+.brand-visual-sub {
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--green-300);
+    display: block;
+    margin-top: 1px;
+}
+.auth-visual h2 { color: #fff; font-size: 1.9rem; font-weight: 800; line-height: 1.25; margin: 16px 0 16px; }
 .auth-visual p { color: var(--text-on-dark-muted); font-size: .95rem; line-height: 1.6; }
 .auth-points { list-style: none; padding: 0; margin: 28px 0 0; display: flex; flex-direction: column; gap: 14px; }
 .auth-points li { display: flex; align-items: center; gap: 10px; color: var(--text-on-dark); font-size: .88rem; font-weight: 600; }
@@ -484,6 +546,17 @@ img, svg { display: block; }
 .auth-card {
     width: 100%;
     max-width: 400px;
+}
+.auth-card-brand {
+    display: block;
+    margin-bottom: 24px;
+    text-decoration: none;
+}
+.auth-card-logo-img {
+    height: 48px;
+    max-width: 220px;
+    object-fit: contain;
+    display: block;
 }
 .auth-card .brand { color: var(--text-primary); margin-bottom: 34px; }
 .auth-card h1 { font-size: 1.55rem; font-weight: 800; margin: 0 0 8px; }
@@ -547,6 +620,11 @@ img, svg { display: block; }
     gap: 14px;
 }
 .admin-topbar .brand { color: #fff; flex-wrap: wrap; }
+.brand-admin-wrap {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
 .admin-topbar-actions { display: flex; align-items: center; gap: 14px; }
 .admin-badge {
     background: rgba(217,180,91,.18);
