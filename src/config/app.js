@@ -62,6 +62,9 @@ function createApp() {
     if (process.env.FORCE_HTTPS === 'true') {
         app.use((req, res, next) => {
             if (req.path === '/health' || req.path === '/ready') return next();
+            const host = (req.get('host') || '').split(':')[0];
+            // Do not force HTTPS on raw IP addresses or localhost since SSL certs cannot be issued for bare IPs
+            if (/^(\d{1,3}\.){3}\d{1,3}$/.test(host) || host === 'localhost') return next();
             if (req.secure || req.get('X-Forwarded-Proto') === 'https') return next();
             if (req.method !== 'GET' && req.method !== 'HEAD') {
                 return res.status(403).json({ success: false, error: 'HTTPS is required.' });

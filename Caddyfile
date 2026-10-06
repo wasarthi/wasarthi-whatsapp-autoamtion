@@ -1,11 +1,8 @@
-# Replace with your real domain before deploying. Caddy handles the entire
-# HTTPS certificate (Let's Encrypt) automatically — nothing else to configure.
-ai4automation.in, www.ai4automation.in {
+# Caddy configuration for WA Sarthi
+# Listens on port 80 (HTTP) for direct IP access without SSL redirect errors.
+# To add automatic HTTPS for a custom domain, replace :80 with yourdomain.com.
+:80 {
     # SSE (Server-Sent Events) stream for QR code / connection status.
-    # flush_interval -1 disables buffering entirely for this route so the
-    # browser receives QR code events in real time instead of waiting for
-    # Caddy's buffer to fill — without this, the QR screen shows
-    # "Waiting for QR Code…" forever on the deployed URL.
     @sse path /api/qr-stream
     handle @sse {
         reverse_proxy app:3000 {
@@ -13,8 +10,7 @@ ai4automation.in, www.ai4automation.in {
         }
     }
 
-    # All other requests — small positive flush_interval for general
-    # streaming responses, still fast enough for normal API calls.
+    # All other requests
     reverse_proxy app:3000 {
         flush_interval 100ms
     }
